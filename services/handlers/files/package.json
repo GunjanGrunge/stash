@@ -8,6 +8,7 @@
     "./register-files": "./src/register-files.ts",
     "./list-children": "./src/list-children.ts",
     "./memory-repository": "./src/memory-repository.ts",
+    "./dynamo-repository": "./src/dynamo-repository.ts",
     "./types": "./src/types.ts"
   },
   "devDependencies": {

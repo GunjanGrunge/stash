@@ -141,6 +141,23 @@ Single-table design, on-demand billing (beta traffic is unpredictable and
 | File | `USER#<user_id>` | `FILE#<file_id>` | full PRD §11 attribute set |
 | Stash | `USER#<user_id>` | `STASH#<stash_id>` | state, counts, bytes, started_at |
 | Manifest | `USER#<user_id>` | `MANIFEST#<manifest_hash>` | folder_id, file_count, total_bytes |
+| FolderIdentity | `USER#<user_id>` | `FOLDERID#<hex(parent)>#<hex(name)>` | folder_id — uniqueness guard, see below |
+| Idempotency | `USER#<user_id>` | `IDEMPOTENCY#<hex(stash_id)>#<hex(key)>` | status_code, body — replayed verbatim |
+
+**FolderIdentity** exists because DynamoDB cannot express a condition against
+a GSI, so "at most one folder per (parent, name)" cannot be enforced on the
+Folder item itself. A plain read-before-write is racy: two concurrent
+registrations of the same path both miss, both insert, and **fork the
+creator's library** (Rule 1). Each folder is therefore written as two items in
+one transaction — the Folder record and this identity item, whose
+`attribute_not_exists` guard exactly one writer can win.
+
+Identity still comes from **lookup, never from hashing the path**, so a rename
+remains a metadata write and every descendant keeps its `folder_id`. Each key
+component is hex-encoded before joining, so a folder legitimately named `a#b`
+cannot collide with — or forge — the identity of one named `a`.
+
+Neither item type carries GSI attributes, so neither appears in any index.
 
 Secondary indexes:
 
