@@ -1,0 +1,17 @@
+{
+  "name": "@stash/handlers-manifest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/check-manifest.ts",
+  "exports": {
+    "./check-manifest": "./src/check-manifest.ts",
+    "./manifest-hash": "./src/manifest-hash.ts",
+    "./memory-repository": "./src/memory-repository.ts",
+    "./repository": "./src/repository.ts",
+    "./types": "./src/types.ts"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145"
+  }
+}

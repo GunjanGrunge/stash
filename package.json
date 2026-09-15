@@ -1,0 +1,23 @@
+{
+  "name": "stash",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "infra",
+    "services/shared",
+    "services/handlers/*"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json",
+    "synth": "cdk synth"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "aws-cdk": "^2",
+    "aws-cdk-lib": "^2",
+    "constructs": "^10",
+    "typescript": "^5.6",
+    "vitest": "^2"
+  }
+}

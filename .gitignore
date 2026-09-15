@@ -1,0 +1,25 @@
+# Vendored SIA (Self Improving Agents) tooling — not part of this project.
+sia/
+
+# Vendored BMAD tooling and its host-discovery skill mirrors.
+_bmad/
+.claude/
+.agent/
+.agents/
+
+# Python virtual environment
+.venv/
+
+# Vendored BMAD host-discovery agent files.
+.github/agents/
+
+# Secrets — AWS credentials arrive here. NEVER commit.
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+
+# CDK synth output
+cdk.out/

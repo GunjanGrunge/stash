@@ -1,0 +1,16 @@
+{
+  "name": "@stash/handlers-files",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    "./register-files": "./src/register-files.ts",
+    "./list-children": "./src/list-children.ts",
+    "./memory-repository": "./src/memory-repository.ts",
+    "./types": "./src/types.ts"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145"
+  }
+}

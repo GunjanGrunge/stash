@@ -1,0 +1,15 @@
+{
+  "name": "@stash/infra",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "synth": "cd .. && cdk synth"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2",
+    "constructs": "^10"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  }
+}
