@@ -255,6 +255,38 @@ safety decision on the first page of a result set.
 - **Date introduced:** 2026-09-15
 - **Status:** `active`
 
+#### AFR-007 — One shared application role is a user-directed deviation from least privilege
+
+**Rule:** This project uses a **single shared execution role** for all Lambda
+handlers, by direct user instruction on 2026-09-15. This overrides the approved
+spec §3.5 and `skills/stash-aws`, both of which require one role per handler.
+Because the blast radius is no longer bounded by per-handler scoping, the role
+must instead be bounded by **resource scoping**: no `Resource: "*"` on any
+statement, S3 limited to the `users/*` prefix of the one bucket, DynamoDB
+limited to the one table and its indexes, logs limited to this app's log-group
+prefix. Any future handler needing a genuinely broader permission gets its own
+role rather than widening this one.
+
+- **Source event:** User instruction, 2026-09-15 — "we must create a role with
+  all the necesary permissions for this application and use the same role for
+  the app across".
+- **Evidence:** the spec it overrides reads "One execution role per handler. No
+  shared 'lambda-role'." (`skills/stash-aws/SKILL.md`), and spec §3.5 requires
+  per-handler least privilege.
+- **Severity:** high — it widens the blast radius of any single handler bug.
+  The read-only `checkManifest` handler now inherits write permissions it has
+  no use for, so a defect there could write or delete data it should never
+  reach.
+- **Error class:** `framework-default-override` — a deliberate, recorded
+  override, not a mistake.
+- **Scope:** all Lambda execution roles in this project.
+- **Date introduced:** 2026-09-15
+- **Status:** `active`
+
+**Revisit trigger:** before the private beta takes real creator data, or as
+soon as a handler needs a permission the others do not. Splitting back into
+per-handler roles is cheap while there are five handlers and expensive later.
+
 #### AFR-002 — A brief must not specify a tool's config exhaustively without verifying that tool's real exit semantics
 
 **Rule:** When a task brief pins a tool's configuration key-by-key *and* also

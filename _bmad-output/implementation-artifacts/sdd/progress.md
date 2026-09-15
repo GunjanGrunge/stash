@@ -167,3 +167,13 @@ one level up. `include` is now `["infra/**/*.ts", "services/**/*.ts"]`.
 Proof (not a green exit code): a probe package at `services/common/src/probe.ts`
 — a path no config names — with a deliberate type error was caught as
 `error TS2322` with zero config edits; probe removed; gate green again.
+
+## Task F3-ROLE: shared application IAM role + tagging — complete — 2026-09-15T01:50:00Z
+Report: `sdd/task-F3ROLE-report.md` · Dispatch: `sdd/task-F3ROLE-dispatch.md`
+Reviewer notes: Controller parsed the synthesized template independently rather
+than accepting the report: 20 actions, zero dangerous actions, exactly one
+`Resource: "*"` (cloudwatch:PutMetricData) and it carries the namespace
+condition. All five cost-allocation tags verified on the IAM role, DynamoDB
+table and S3 bucket. Shared-role deviation recorded as AFR-007 with a revisit
+trigger. Deploy NOT run — separate High-severity approval.
+Usage: 71,597 subagent tokens; 12 tool uses; 288s. Spawns used: 14/15.

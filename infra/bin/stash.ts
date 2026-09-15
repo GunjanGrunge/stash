@@ -1,20 +1,50 @@
 #!/usr/bin/env node
 import * as cdk from "aws-cdk-lib";
+import { StashAppRoleStack } from "../lib/app-role-stack";
 import { StashDataStack } from "../lib/data-stack";
 
 /**
  * STASH CDK app entry point.
  *
- * Only the data stack exists today; the Identity, Api and Observability stacks
- * are not written yet and are deliberately NOT stubbed here.
+ * The data stack and the shared application role stack exist today; the
+ * Identity, Api and Observability stacks are not written yet and are
+ * deliberately NOT stubbed here.
  *
  * The region is pinned so that `cdk synth` is environment-agnostic with
  * respect to account credentials (Rule 11: synth only, never deploy).
  */
-const app = new cdk.App();
+const ENV: cdk.Environment = { region: "ap-south-1" };
 
-new StashDataStack(app, "StashDataStack", {
-  env: { region: "ap-south-1" },
-});
+/**
+ * Cost-allocation tags (PRD §18 cost telemetry). Applied at App level so every
+ * taggable resource in every stack inherits them.
+ */
+const APP_TAGS: Record<string, string> = {
+  Project: "STASH",
+  Env: "beta",
+  Component: "control-plane",
+  ManagedBy: "CDK",
+  CostCenter: "stash-beta",
+};
 
-app.synth();
+export function buildApp(): cdk.App {
+  const app = new cdk.App();
+
+  const data = new StashDataStack(app, "StashDataStack", { env: ENV });
+
+  new StashAppRoleStack(app, "StashAppRoleStack", {
+    env: ENV,
+    table: data.table,
+    bucket: data.bucket,
+    // userPoolArn is intentionally unset: the Identity stack does not exist
+    // yet, and an unscoped Cognito grant is not acceptable.
+  });
+
+  for (const [key, value] of Object.entries(APP_TAGS)) {
+    cdk.Tags.of(app).add(key, value);
+  }
+
+  return app;
+}
+
+buildApp().synth();
