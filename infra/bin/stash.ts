@@ -2,6 +2,7 @@
 import * as cdk from "aws-cdk-lib";
 import { StashAppRoleStack } from "../lib/app-role-stack";
 import { StashDataStack } from "../lib/data-stack";
+import { StashIdentityStack } from "../lib/identity-stack";
 
 /**
  * STASH CDK app entry point.
@@ -31,13 +32,18 @@ export function buildApp(): cdk.App {
   const app = new cdk.App();
 
   const data = new StashDataStack(app, "StashDataStack", { env: ENV });
+  const identity = new StashIdentityStack(app, "StashIdentityStack", {
+    env: ENV,
+  });
 
   new StashAppRoleStack(app, "StashAppRoleStack", {
     env: ENV,
     table: data.table,
     bucket: data.bucket,
-    // userPoolArn is intentionally unset: the Identity stack does not exist
-    // yet, and an unscoped Cognito grant is not acceptable.
+    // Now that the Identity stack exists, the Cognito grant is scoped to this
+    // one pool. It stayed unset until there was a real ARN to scope it to —
+    // an unscoped Cognito grant was never acceptable.
+    userPoolArn: identity.userPool.userPoolArn,
   });
 
   for (const [key, value] of Object.entries(APP_TAGS)) {

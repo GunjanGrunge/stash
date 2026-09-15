@@ -448,3 +448,83 @@ preference into a measurement.
 | §12 Security requirements | §3.3, §3.5, §6 |
 | §13 Reliability | §5 in full |
 | §18 Cost telemetry | §3.6 |
+
+---
+
+## Addendum — API slice decisions (2026-09-15)
+
+Approved by the user before the API slice began. These amend, but do not
+replace, the sections above.
+
+### A1. Cognito is built now, identity *product* work is deferred
+
+The user asked to defer identity. Deferring the **pool** was not possible
+without breaking Rule 7 (`user_id` comes only from verified JWT claims), so
+the split is: `StashIdentityStack` ships now as a bare user pool plus an app
+client (email sign-in, self-signup disabled, no hosted UI, no groups, no
+MFA), and the identity *product* surface — device flows, MFA, recovery — is
+deferred. The pool ARN finally scopes the Cognito grant that
+`StashAppRoleStack` has deliberately left unset since it was written.
+
+Rejected: a dev-only Lambda authorizer minting claims from a shared secret.
+It is a real auth bypass living in the codebase, and that kind of code ships.
+
+### A2. Endpoint scope for this slice
+
+Included: `createStash`, `checkManifest`, `registerFiles`, `signParts`,
+`completeUpload`, `abortUpload`, `cancelStash`, `completeStash`,
+`listChildren`, `listStashes`, `getUsage`.
+
+Deferred: `getFile`, `POST /devices`, `DELETE /devices/{id}`.
+
+The API is **public, JWT-only** — no IP allow-list. Acceptable for a 2-user
+private beta; revisit before any wider release.
+
+### A3. Batch chunking belongs to the handler, not the repository
+
+`Repository.putEntities` is contractually all-or-nothing, DynamoDB caps a
+transaction at 100 actions, and each new folder costs two (record + identity
+guard). One registration therefore tops out near 50 files, while real creator
+folders hold thousands.
+
+`registerFiles` splits its batch into transaction-sized chunks and writes
+them sequentially, remaining idempotent on the client `Idempotency-Key` so a
+partial failure is safely retried. Folder creation stays atomic per chunk,
+and the identity guard still prevents forking across chunk boundaries.
+
+Rejected: relaxing the repository to split internally. That reintroduces the
+half-written-library state the transaction exists to prevent, and hides it
+behind an interface that still claims atomicity.
+
+### A4. Integration tests run against the deployed table
+
+Plan Task 12 specifies DynamoDB Local. Docker and Java are both unavailable
+in this environment, so integration tests instead run against the deployed
+`ap-south-1` table using throwaway user partitions, cleaned up afterwards.
+This proves real conditional-write and transaction semantics, which mocks
+cannot. Task 12's DynamoDB Local suite stays skipped and honestly labelled.
+
+### A5. One shared execution role, superseding §3.5
+
+Section 3.5 specifies "one execution role per handler. No shared
+`lambda-role`." The user subsequently instructed: *"we must create a role with
+all the necesary permissions for this application and use the same role for
+the app across."* `StashAppRoleStack` was built to that instruction and is
+deployed.
+
+A direct user instruction outranks the spec (SIA authority order), so the
+**shared `StashAppRole` stands** and every Lambda in `StashApiStack` assumes
+it. Recorded here rather than resolved silently, because §3.5 still reads the
+other way and the next reader would otherwise see a contradiction.
+
+The trade-off is real and worth stating: a shared role means a read-only
+handler such as `getUsage` carries the same write permissions as
+`completeUpload`, so a defect in any one handler has the blast radius of all
+of them. The role remains tightly scoped to this table, this bucket prefix,
+and this log-group prefix — what it loses is per-handler action narrowing.
+Worth revisiting before the beta widens.
+
+The §7 assertion that no grant uses `Resource: "*"` still holds, with one
+audited exception already in the deployed role: `cloudwatch:PutMetricData`,
+which AWS does not scope by resource, constrained instead by a
+`cloudwatch:namespace = STASH` condition.

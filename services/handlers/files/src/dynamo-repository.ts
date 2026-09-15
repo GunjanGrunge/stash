@@ -40,13 +40,29 @@ function idempotencySk(stashId: string, key: string): string {
   return `IDEMPOTENCY#${hex(stashId)}#${hex(key)}`;
 }
 
-/** True when a transaction was cancelled because a guard condition lost. */
+/**
+ * True when a transaction was cancelled because a guard condition lost.
+ *
+ * Matched by error NAME as well as by `instanceof`. If two copies of
+ * `@aws-sdk/client-dynamodb` ever resolve in the dependency tree — ordinary in
+ * a workspace once another package pins its own SDK version — `instanceof`
+ * silently returns false against the other copy's class. A lost folder-identity
+ * guard would then surface as an unknown error and a 500, instead of the 409
+ * that tells the caller their folder already exists.
+ */
 function isConditionFailure(error: unknown): boolean {
   if (error instanceof ConditionalCheckFailedException) return true;
-  if (error instanceof TransactionCanceledException) {
-    return (error.CancellationReasons ?? []).some(
-      (reason) => reason.Code === "ConditionalCheckFailed",
-    );
+
+  const name = (error as { name?: string } | undefined)?.name;
+  if (name === "ConditionalCheckFailedException") return true;
+
+  if (
+    error instanceof TransactionCanceledException ||
+    name === "TransactionCanceledException"
+  ) {
+    const reasons =
+      (error as TransactionCanceledException).CancellationReasons ?? [];
+    return reasons.some((reason) => reason.Code === "ConditionalCheckFailed");
   }
   return false;
 }

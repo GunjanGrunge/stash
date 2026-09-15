@@ -8,6 +8,7 @@ import {
   userIdFromEvent,
   validateRelativePath,
 } from "../../../shared/src/index.js";
+import { TRANSACT_ITEM_LIMIT } from "./dynamo-repository.js";
 import type { Repository } from "./repository.js";
 import type { EntityRecord, FileRecord, FolderRecord, RegisterFileInput } from "./types.js";
 
@@ -44,6 +45,47 @@ function errorResult(err: unknown): HandlerResult {
     statusCode: 500,
     body: JSON.stringify({ code: "internal_error", message: "Unexpected error" }),
   };
+}
+
+/**
+ * DynamoDB charges a transaction per ACTION, not per item: a FOLDER costs two
+ * (the FOLDER record plus its FOLDERID identity guard), a FILE costs one.
+ * Counting items instead of actions is how a batch silently doubles its real
+ * transaction size.
+ */
+const ACTIONS_PER_FOLDER = 2;
+const ACTIONS_PER_FILE = 1;
+
+function actionCost(item: EntityRecord): number {
+  return item.entity === "FOLDER" ? ACTIONS_PER_FOLDER : ACTIONS_PER_FILE;
+}
+
+/**
+ * Splits an ordered list of records into groups no single one of which can
+ * exceed the transaction action limit (Addendum A3). Order is preserved, so
+ * a record's dependencies stay in the same chunk or an earlier one.
+ */
+export function chunkByActionCost(
+  items: EntityRecord[],
+  limit: number = TRANSACT_ITEM_LIMIT,
+): EntityRecord[][] {
+  const chunks: EntityRecord[][] = [];
+  let current: EntityRecord[] = [];
+  let cost = 0;
+
+  for (const item of items) {
+    const itemCost = actionCost(item);
+    if (current.length > 0 && cost + itemCost > limit) {
+      chunks.push(current);
+      current = [];
+      cost = 0;
+    }
+    current.push(item);
+    cost += itemCost;
+  }
+  if (current.length > 0) chunks.push(current);
+
+  return chunks;
 }
 
 /**
@@ -195,8 +237,20 @@ export function registerFiles(deps: { repo: Repository }) {
         });
       }
 
+      // Phase 3 — write in transaction-sized chunks (Addendum A3).
+      //
+      // Every NEW folder precedes every file, and `newFolders` is built
+      // ancestor-before-descendant, so chunking an order-preserving list can
+      // only ever place a parent in the SAME chunk or an EARLIER one.
+      //
+      // Chunks are written SEQUENTIALLY on purpose: two chunks in flight at
+      // once would race on folder identity, and the loser of the identity
+      // guard would fork the creator's library (Rule 1). Each chunk stays
+      // all-or-nothing, so the repository's contract is untouched.
       const items: EntityRecord[] = [...newFolders, ...files];
-      await deps.repo.putEntities(items);
+      for (const chunk of chunkByActionCost(items)) {
+        await deps.repo.putEntities(chunk);
+      }
       log.info("files_registered", {
         file_count: files.length,
         folder_count: newFolders.length,
