@@ -5,7 +5,8 @@
   "workspaces": [
     "infra",
     "services/shared",
-    "services/handlers/*"
+    "services/handlers/*",
+    "services/entrypoints"
   ],
   "scripts": {
     "test": "vitest run",
