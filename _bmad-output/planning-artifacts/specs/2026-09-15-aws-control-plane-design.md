@@ -528,3 +528,44 @@ The §7 assertion that no grant uses `Resource: "*"` still holds, with one
 audited exception already in the deployed role: `cloudwatch:PutMetricData`,
 which AWS does not scope by resource, constrained instead by a
 `cloudwatch:namespace = STASH` condition.
+
+### A6. `GET /folders/{folderId}/children`, correcting §3.4
+
+Section 3.4 spells this route `GET /folders/{id}/children`. The handler reads
+`pathParameters.folderId` (falling back to `parentFolderId`), so routed as
+`{id}` the parameter resolves to `undefined`, `parentFromEvent` returns `null`,
+and **every request silently lists the creator's ROOT folder** instead of the
+folder they opened.
+
+That is a wrong-data bug, not an error: it returns 200 with plausible content,
+and no unit test can see it, because handler tests synthesize their own events
+and never traverse a real route. The deployed spelling is `{folderId}`, and the
+API stack test asserts that spelling.
+
+Two related findings, both harmless today but worth knowing before anyone
+treats a path segment as authoritative: `checkManifest` reads **nothing** from
+the path, and `registerFiles` takes `stashId` from the **request body**. The
+`{id}` segment in `/stashes/{id}/manifest-check` and `/stashes/{id}/files` is
+therefore decorative.
+
+### A7. OPEN — the manifest dedupe path has no writer
+
+`POST /stashes/{id}/manifest-check` is wired and authorized, but the PRD §7
+duplicate-folder feature **cannot fire**, for two compounding reasons:
+
+1. `services/handlers/manifest/` shipped only `MemoryManifestRepository`. A
+   provisional `DynamoManifestRepository` now exists in
+   `services/entrypoints/src/manifest-repository.ts` so the route is not left
+   unwired, but it is in the wrong package and has **no unit tests**. It
+   belongs beside its siblings in the manifest package.
+2. Nothing in the control plane ever calls `putManifest`. Grepping for callers
+   finds only that package's own tests. So every real request answers
+   `match: "none"`, whatever the creator has already Stashed.
+
+Consequence: the bandwidth saving that is the entire point of the feature
+(PRD §7 — "1,847 of 1,850 files already Stashed") never happens. The dialog
+would never appear.
+
+The missing writer is most plausibly `completeStash`, which already knows the
+committed file set and runs exactly once per Stash. That is a design decision,
+not a defect to be patched silently, and is **deferred pending a decision**.

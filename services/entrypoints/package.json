@@ -1,0 +1,28 @@
+{
+  "name": "@stash/entrypoints",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./create-stash": "./src/create-stash.ts",
+    "./check-manifest": "./src/check-manifest.ts",
+    "./register-files": "./src/register-files.ts",
+    "./complete-stash": "./src/complete-stash.ts",
+    "./cancel-stash": "./src/cancel-stash.ts",
+    "./sign-parts": "./src/sign-parts.ts",
+    "./complete-upload": "./src/complete-upload.ts",
+    "./abort-upload": "./src/abort-upload.ts",
+    "./list-children": "./src/list-children.ts",
+    "./list-stashes": "./src/list-stashes.ts",
+    "./get-usage": "./src/get-usage.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1132.0",
+    "@aws-sdk/client-s3": "^3.1132.0",
+    "@aws-sdk/lib-dynamodb": "^3.1132.0",
+    "@aws-sdk/s3-request-presigner": "^3.1132.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145"
+  }
+}

@@ -3,6 +3,8 @@ import * as cdk from "aws-cdk-lib";
 import { StashAppRoleStack } from "../lib/app-role-stack";
 import { StashDataStack } from "../lib/data-stack";
 import { StashIdentityStack } from "../lib/identity-stack";
+import { StashApiStack } from "../lib/api-stack";
+import { StashObservabilityStack } from "../lib/observability-stack";
 
 /**
  * STASH CDK app entry point.
@@ -36,7 +38,7 @@ export function buildApp(): cdk.App {
     env: ENV,
   });
 
-  new StashAppRoleStack(app, "StashAppRoleStack", {
+  const appRole = new StashAppRoleStack(app, "StashAppRoleStack", {
     env: ENV,
     table: data.table,
     bucket: data.bucket,
@@ -44,6 +46,28 @@ export function buildApp(): cdk.App {
     // one pool. It stayed unset until there was a real ARN to scope it to —
     // an unscoped Cognito grant was never acceptable.
     userPoolArn: identity.userPool.userPoolArn,
+  });
+
+  // Observability is constructed BEFORE the API so the API can take ownership
+  // of each handler's log group. Lambda would otherwise create
+  // `/aws/lambda/stash-<name>` itself at first invocation with infinite
+  // retention, and this stack could then never create a group that already
+  // exists. Passing the groups through removes that race rather than relying
+  // on deploy order to dodge it.
+  const observability = new StashObservabilityStack(
+    app,
+    "StashObservabilityStack",
+    { env: ENV, table: data.table },
+  );
+
+  new StashApiStack(app, "StashApiStack", {
+    env: ENV,
+    userPool: identity.userPool,
+    userPoolClient: identity.userPoolClient,
+    table: data.table,
+    bucket: data.bucket,
+    role: appRole.role,
+    logGroups: observability.handlerLogGroups,
   });
 
   for (const [key, value] of Object.entries(APP_TAGS)) {
