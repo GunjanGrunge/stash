@@ -20,7 +20,7 @@ test("browser renders explicit hierarchy labels and required states", async () =
 });
 
 test("sign-in transition hides the pre-auth cards before showing the browser", async () => {
-  const source = await read("ui/post-signin.js");
+  const source = await read("../ui/post-signin.js");
   assert.match(source, /querySelectorAll\("\.welcome-card"\)/);
   assert.match(source, /card\.hidden\s*=\s*true/);
   assert.match(source, /screen\.hidden\s*=\s*false/);
