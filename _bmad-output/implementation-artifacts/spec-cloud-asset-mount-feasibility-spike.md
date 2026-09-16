@@ -88,13 +88,19 @@ spike; deploy or install WinFsp without separate explicit approval.
   `infra/lib/api-stack.ts`, `infra/lib/observability-stack.ts`, API/infra tests,
   and `docs/api-reference.md` -- compose the JWT route and short-lived S3 GET
   presigner without key/URL logging or new IAM permissions.
-- [ ] `desktop/Cargo.toml`, `desktop/crates/stash-core/`, and tests -- create
+- [x] `desktop/Cargo.toml`, `desktop/crates/stash-core/`, and tests -- create
   the Rust domain service with a range-provider port, verified segment cache,
-  bounded timeout policy, and no UI dependency.
+  bounded timeout policy, and no UI dependency. Independently re-verified
+  2026-09-16: `cargo test` 2/2 passing, no warnings.
 - [ ] `desktop/crates/stash-windows-fs/` and `desktop/tests/mount-spike/` --
   add a WinFsp adapter that maps read/enumerate/stat to the core. Use a local
   range-server fixture for automated tests and document the separately approved
-  live WinFsp/S3 manual run.
+  live WinFsp/S3 manual run. **Partially done:** the local range-server fixture
+  and a real HTTP-backed `RangeProvider` now exist (`stash-s3-provider`), so the
+  transport half of this task is proven end-to-end. The actual WinFsp trait
+  wiring (read/enumerate/stat callbacks) is still open — that needs the
+  `winfsp` crate and native Windows, neither available in the environment this
+  slice was built in.
 - [ ] `desktop/README.md` -- record Windows prerequisites, GPLv3 notices,
   WinFsp installation/run steps, and the Explorer + selected-tool evidence
   procedure. No installer or Tauri shell yet.
@@ -115,6 +121,30 @@ spike; deploy or install WinFsp without separate explicit approval.
   application stall.
 
 ## Implementation Notes
+
+**2026-09-16 — `stash-s3-provider` crate added.** New crate, separate from
+`stash-windows-fs`, because HTTP byte-range fetching against a lease URL is
+platform-agnostic (will be reused on macOS later) while `stash-windows-fs`
+stays a thin, WinFsp-only adapter. `HttpRangeProvider<L: LeaseSource>`
+performs real `Range: bytes=...` GETs; `LeaseSource` is a separate trait so
+this crate never calls the control plane or sees a credential, only the URL
+the lease route already returns. HTTP `403`/`404` map to `LeaseExpired`
+(triggers the existing renew-once path in `Cache::read`); any transport-level
+failure (refused connection, reset, timed-out socket) maps to `Offline`.
+Segment integrity is currently self-consistency only (hash of what was
+received, not a check against the file's stored manifest checksum) — matches
+the existing test-mock convention in `stash-core`, flagged here as a known
+gap rather than silently left unstated.
+
+Tested against a real local HTTP server (`tiny_http`, dev-dependency only)
+that honors `Range` headers the way an S3 presigned URL does — this is the
+"local range-server fixture" the task list called for. Not yet wired into an
+actual WinFsp mount test; that's the next slice.
+
+Verification: `cargo test --manifest-path desktop/Cargo.toml` — 5/5 passing
+(2 `stash-core`, 3 `stash-s3-provider`), 0 warnings, clean build. Toolchain
+installed fresh in this environment (`rustup`) to make this a real, run
+verification rather than an inspection-only claim.
 
 ## Spec Change Log
 
