@@ -22,9 +22,9 @@
 //! Deliberately out of scope for this slice: persisting tokens (keychain or
 //! otherwise) and refresh — this only proves sign-in succeeds.
 use aws_cognito_srp::{SrpClient, User, VerificationParameters};
-use aws_sdk_cognitoidentityprovider::Client;
 use aws_sdk_cognitoidentityprovider::config::{Credentials, Region};
 use aws_sdk_cognitoidentityprovider::types::{AuthFlowType, ChallengeNameType};
+use aws_sdk_cognitoidentityprovider::Client;
 use serde::Serialize;
 use std::sync::{Mutex, OnceLock};
 
@@ -46,9 +46,9 @@ pub(crate) fn id_token() -> Result<String, String> {
 }
 
 fn retain_id_token(token: Option<&str>) -> Result<(), String> {
-    let token = token.filter(|value| !value.is_empty()).ok_or_else(|| {
-        "Cognito accepted the password but returned no ID token.".to_string()
-    })?;
+    let token = token
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Cognito accepted the password but returned no ID token.".to_string())?;
     *ID_TOKEN
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -59,8 +59,13 @@ fn retain_id_token(token: Option<&str>) -> Result<(), String> {
 #[derive(Serialize)]
 #[serde(tag = "outcome")]
 pub enum AuthOutcome {
-    SignedIn { username: String },
-    NewPasswordRequired { session: Option<String>, username: String },
+    SignedIn {
+        username: String,
+    },
+    NewPasswordRequired {
+        session: Option<String>,
+        username: String,
+    },
 }
 
 async fn cognito_client() -> Client {
@@ -84,7 +89,11 @@ async fn cognito_client() -> Client {
 #[tauri::command]
 pub async fn sign_in(username: String, password: String) -> Result<AuthOutcome, String> {
     let cognito = cognito_client().await;
-    let srp = SrpClient::new(User::new(USER_POOL_ID, &username, &password), CLIENT_ID, None);
+    let srp = SrpClient::new(
+        User::new(USER_POOL_ID, &username, &password),
+        CLIENT_ID,
+        None,
+    );
     let params = srp.get_auth_parameters();
 
     let initiate = cognito
@@ -117,9 +126,13 @@ pub async fn sign_in(username: String, password: String) -> Result<AuthOutcome, 
         .get("USER_ID_FOR_SRP")
         .ok_or_else(|| "Cognito's challenge was missing USER_ID_FOR_SRP.".to_string())?;
 
-    let VerificationParameters { password_claim_secret_block, password_claim_signature, timestamp } =
-        srp.verify(secret_block, user_id, salt, srp_b)
-            .map_err(|err| format!("Couldn't verify the password: {err}"))?;
+    let VerificationParameters {
+        password_claim_secret_block,
+        password_claim_signature,
+        timestamp,
+    } = srp
+        .verify(secret_block, user_id, salt, srp_b)
+        .map_err(|err| format!("Couldn't verify the password: {err}"))?;
 
     let response = cognito
         .respond_to_auth_challenge()
@@ -136,9 +149,14 @@ pub async fn sign_in(username: String, password: String) -> Result<AuthOutcome, 
 
     if let Some(challenge) = &response.challenge_name {
         return if *challenge == ChallengeNameType::NewPasswordRequired {
-            Ok(AuthOutcome::NewPasswordRequired { session: response.session, username })
+            Ok(AuthOutcome::NewPasswordRequired {
+                session: response.session,
+                username,
+            })
         } else {
-            Err(format!("Cognito asked for an unsupported next step: {challenge:?}"))
+            Err(format!(
+                "Cognito asked for an unsupported next step: {challenge:?}"
+            ))
         };
     }
 
@@ -201,7 +219,10 @@ mod tests {
             username: "creator@example.com".to_string(),
         })
         .expect("auth outcome is serializable");
-        assert_eq!(json, r#"{"outcome":"SignedIn","username":"creator@example.com"}"#);
+        assert_eq!(
+            json,
+            r#"{"outcome":"SignedIn","username":"creator@example.com"}"#
+        );
         assert!(!json.contains("token"));
     }
 }

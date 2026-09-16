@@ -24,6 +24,8 @@ test("mount presentation includes the selected drive letter and persistent statu
   assert.match(source, /STASH \(\$\{letter\}:/);
   assert.match(source, /mount_status/);
   assert.match(source, /mount_stash/);
+  assert.match(source, /unmount_stash/);
+  assert.match(source, /files and cache were kept/);
 });
 
 test("the browser keeps secrets and payload bytes outside the webview", async () => {

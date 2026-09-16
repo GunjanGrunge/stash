@@ -27,7 +27,9 @@ fn safe_http_error(status: StatusCode, body: &str) -> String {
     let parsed = serde_json::from_str::<ApiError>(body).ok();
     match parsed.and_then(|e| e.message.or(e.code)) {
         Some(message) if message.len() <= 240 => message,
-        _ if status == StatusCode::UNAUTHORIZED => "Your sign-in has expired. Please sign in again.".to_string(),
+        _ if status == StatusCode::UNAUTHORIZED => {
+            "Your sign-in has expired. Please sign in again.".to_string()
+        }
         _ => format!("STASH returned an error ({})", status.as_u16()),
     }
 }
@@ -39,7 +41,9 @@ async fn get_json(path: &str) -> Result<Value, String> {
         .bearer_auth(token)
         .send()
         .await
-        .map_err(|_| "STASH could not be reached. Check your connection and try again.".to_string())?;
+        .map_err(|_| {
+            "STASH could not be reached. Check your connection and try again.".to_string()
+        })?;
     let status = response.status();
     let body = response
         .text()
@@ -56,7 +60,9 @@ pub async fn list_children(folder_id: String) -> Result<Value, String> {
     let folder_id = folder_id.trim();
     if folder_id.is_empty()
         || folder_id.len() > 128
-        || folder_id.chars().any(|c| !c.is_ascii_alphanumeric() && !matches!(c, '-' | '_' ))
+        || folder_id
+            .chars()
+            .any(|c| !c.is_ascii_alphanumeric() && !matches!(c, '-' | '_'))
     {
         return Err("That folder could not be opened.".to_string());
     }
