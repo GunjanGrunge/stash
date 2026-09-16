@@ -26,10 +26,35 @@ use aws_sdk_cognitoidentityprovider::Client;
 use aws_sdk_cognitoidentityprovider::config::{Credentials, Region};
 use aws_sdk_cognitoidentityprovider::types::{AuthFlowType, ChallengeNameType};
 use serde::Serialize;
+use std::sync::{Mutex, OnceLock};
 
 const REGION: &str = "ap-south-1";
 const USER_POOL_ID: &str = "ap-south-1_0ELYEOOy0";
 const CLIENT_ID: &str = "6ovr480b8f4lhuvdvvonsk8atp";
+
+/// Short-lived access material is process-local only. It is deliberately not
+/// part of `AuthOutcome`, so Tauri never serializes it into the webview.
+static ID_TOKEN: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+pub(crate) fn id_token() -> Result<String, String> {
+    ID_TOKEN
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|_| "Sign-in session is unavailable.".to_string())?
+        .clone()
+        .ok_or_else(|| "Please sign in again to access your STASH.".to_string())
+}
+
+fn retain_id_token(token: Option<&str>) -> Result<(), String> {
+    let token = token.filter(|value| !value.is_empty()).ok_or_else(|| {
+        "Cognito accepted the password but returned no ID token.".to_string()
+    })?;
+    *ID_TOKEN
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|_| "Sign-in session is unavailable.".to_string())? = Some(token.to_owned());
+    Ok(())
+}
 
 #[derive(Serialize)]
 #[serde(tag = "outcome")]
@@ -117,7 +142,8 @@ pub async fn sign_in(username: String, password: String) -> Result<AuthOutcome, 
         };
     }
 
-    if response.authentication_result.is_some() {
+    if let Some(result) = response.authentication_result.as_ref() {
+        retain_id_token(result.id_token())?;
         Ok(AuthOutcome::SignedIn { username })
     } else {
         Err("Cognito accepted the password but returned no tokens.".to_string())
@@ -142,7 +168,8 @@ pub async fn complete_new_password(
         .await
         .map_err(|err| describe_challenge_error(&err))?;
 
-    if response.authentication_result.is_some() {
+    if let Some(result) = response.authentication_result.as_ref() {
+        retain_id_token(result.id_token())?;
         Ok(AuthOutcome::SignedIn { username })
     } else {
         Err("Cognito accepted the new password but returned no tokens.".to_string())
@@ -161,5 +188,20 @@ fn describe_challenge_error<E: std::fmt::Debug>(err: &E) -> String {
         "That password doesn't meet the account's password requirements.".to_string()
     } else {
         debug
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signed_in_outcome_never_serializes_token_material() {
+        let json = serde_json::to_string(&AuthOutcome::SignedIn {
+            username: "creator@example.com".to_string(),
+        })
+        .expect("auth outcome is serializable");
+        assert_eq!(json, r#"{"outcome":"SignedIn","username":"creator@example.com"}"#);
+        assert!(!json.contains("token"));
     }
 }

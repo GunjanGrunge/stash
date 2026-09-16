@@ -2,7 +2,7 @@
 
 This package is the isolated Windows Tauri shell for the **Welcome / Sign in** and post-sign-in STASH file browser screens. Sign-in remains on the Rust side; the browser requests metadata and mount actions through Tauri IPC.
 
-The browser preserves the File/Folder hierarchy, shows breadcrumb navigation, loading/empty/error states, selection details, storage usage, and the mounted-drive status. This slice is metadata-only: payload bytes, filesystem writes, credentials, and leases remain outside the webview. Until the authenticated metadata IPC commands are connected to the core service, fixture or unavailable responses are expected; the UI never claims an upload or mount succeeded without a service response.
+The browser preserves the File/Folder hierarchy, shows breadcrumb navigation, loading/empty/error states, selection details, and storage usage. Metadata requests now run through Rust-owned authenticated IPC; payload bytes, filesystem writes, credentials, and leases remain outside the webview. Drive mounting and write-through sync are intentionally a later slice: the UI never claims a mount or upload succeeded without a service response.
 
 ## Prerequisites
 
