@@ -10,7 +10,7 @@ use serde_json::Value;
 
 const DEFAULT_API_URL: &str = "https://8ojdkvlefl.execute-api.ap-south-1.amazonaws.com";
 
-fn api_url() -> String {
+pub(crate) fn api_url() -> String {
     option_env!("STASH_API_URL")
         .unwrap_or(DEFAULT_API_URL)
         .trim_end_matches('/')
@@ -72,6 +72,34 @@ pub async fn list_children(folder_id: String) -> Result<Value, String> {
 #[tauri::command]
 pub async fn get_usage() -> Result<Value, String> {
     get_json("/me/usage").await
+}
+
+/// One mountable root-level file: only committed files are mounted, since
+/// pending/uploading/trashed/purging/failed files have no readable bytes.
+#[derive(Deserialize)]
+pub(crate) struct ChildItem {
+    pub(crate) entity: String,
+    #[serde(rename = "fileId")]
+    pub(crate) file_id: Option<String>,
+    pub(crate) name: String,
+    #[serde(rename = "sizeBytes")]
+    pub(crate) size_bytes: Option<u64>,
+    pub(crate) state: Option<String>,
+}
+
+/// Lists the committed files directly under the root folder. Subdirectories
+/// are deliberately out of scope for the first live mount — a flat root
+/// listing is enough to prove the mount against real backend data.
+pub(crate) async fn list_root_files() -> Result<Vec<ChildItem>, String> {
+    let response = get_json("/folders/ROOT/children").await?;
+    let items: Vec<ChildItem> = serde_json::from_value(
+        response.get("items").cloned().unwrap_or(Value::Array(vec![])),
+    )
+    .map_err(|_| "STASH returned an unreadable file list.".to_string())?;
+    Ok(items
+        .into_iter()
+        .filter(|item| item.entity == "FILE" && item.state.as_deref() == Some("committed"))
+        .collect())
 }
 
 #[cfg(test)]
