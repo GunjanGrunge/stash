@@ -111,6 +111,12 @@ impl MountController {
             return Ok(self.status());
         }
 
+        // WinFsp dynamically loads its native DLL. It must be initialized
+        // before a host is created; otherwise a delay-load exception can
+        // escape the native boundary and terminate the desktop process.
+        winfsp::winfsp_init()
+            .map_err(|err| format!("STASH couldn't initialize the Windows drive service: {err:?}"))?;
+
         // An account with no committed files is still a valid STASH: mount
         // it as an empty, usable root directory. Explorer and creative apps
         // can then use the same S: drive before the first file arrives.
