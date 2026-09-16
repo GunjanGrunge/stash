@@ -30,7 +30,7 @@ describe("StashDataStack DynamoDB table", () => {
     });
   });
 
-  it("declares exactly three GSIs named gsi1, gsi2 and gsi3", () => {
+  it("declares exactly five GSIs including sparse Trash and retention indexes", () => {
     const template = synth();
     const tables = template.findResources("AWS::DynamoDB::Table");
     const keys = Object.keys(tables);
@@ -39,9 +39,9 @@ describe("StashDataStack DynamoDB table", () => {
       IndexName: string;
       KeySchema: Array<{ AttributeName: string; KeyType: string }>;
     }>;
-    expect(gsis).toHaveLength(3);
-    expect(gsis.map((g) => g.IndexName)).toEqual(["gsi1", "gsi2", "gsi3"]);
-    for (const n of [1, 2, 3]) {
+    expect(gsis).toHaveLength(5);
+    expect(gsis.map((g) => g.IndexName)).toEqual(["gsi1", "gsi2", "gsi3", "gsi4", "gsi5"]);
+    for (const n of [1, 2, 3, 4, 5]) {
       const gsi = gsis.find((g) => g.IndexName === `gsi${n}`)!;
       expect(gsi.KeySchema).toEqual([
         { AttributeName: `gsi${n}pk`, KeyType: "HASH" },
@@ -59,6 +59,10 @@ describe("StashDataStack DynamoDB table", () => {
       "gsi2sk",
       "gsi3pk",
       "gsi3sk",
+      "gsi4pk",
+      "gsi4sk",
+      "gsi5pk",
+      "gsi5sk",
     ]) {
       expect(attrs).toContainEqual({ AttributeName: name, AttributeType: "S" });
     }

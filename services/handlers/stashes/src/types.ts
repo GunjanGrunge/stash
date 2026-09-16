@@ -26,6 +26,10 @@ export interface StashRecord {
   reservedBytes: number;
   /** Bytes actually verified `committed`. */
   committedBytes: number;
+  /** Selected-root display name captured at Stash creation. */
+  manifestFolderName?: string;
+  /** Real selected-root Folder identity recorded during registration. */
+  manifestFolderId?: string;
   startedAt: string;
   updatedAt: string;
 }
@@ -53,4 +57,7 @@ export interface StashFileRef {
   fileId: string;
   state: "pending" | "uploading" | "committed" | "failed";
   sizeBytes: number;
+  originalRelativePath?: string;
+  checksum?: string;
+  rootFolderId?: string;
 }

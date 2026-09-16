@@ -7,10 +7,11 @@ import {
   GetCommand,
   QueryCommand,
   TransactWriteCommand,
+  UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { badRequest, conflict } from "../../../shared/src/index.js";
 import type { IdempotentResult, Repository } from "./repository.js";
-import type { EntityRecord, FolderRecord } from "./types.js";
+import type { EntityRecord, FileRecord, FolderRecord } from "./types.js";
 
 /**
  * DynamoDB caps a single transaction at 100 actions. `putEntities` is
@@ -221,6 +222,104 @@ export class DynamoRepository implements Repository {
     const item = result.Item as EntityRecord | undefined;
     if (item === undefined || item.entity !== "FOLDER") return undefined;
     return item;
+  }
+
+  async findFile(userId: string, fileId: string): Promise<FileRecord | undefined> {
+    const result = await this.doc.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { pk: `USER#${userId}`, sk: `FILE#${fileId}` },
+        ConsistentRead: true,
+      }),
+    );
+    const item = result.Item as EntityRecord | undefined;
+    if (item === undefined || item.entity !== "FILE") return undefined;
+    return item;
+  }
+
+  async trashFile(
+    userId: string,
+    fileId: string,
+    deletedAt: string,
+    purgeAfter: string,
+  ): Promise<FileRecord | undefined> {
+    const pk = `USER#${userId}`;
+    try {
+      const result = await this.doc.send(new UpdateCommand({
+        TableName: this.tableName,
+        Key: { pk, sk: `FILE#${fileId}` },
+        // Only committed bytes may enter the recoverable lifecycle. Keeping
+        // both sparse indexes on this one conditional mutation means a file
+        // can never be browsable and in Trash at the same time.
+        ConditionExpression: "entity = :file AND #state = :committed",
+        UpdateExpression: "SET #state = :trashed, deletedAt = :deletedAt, purgeAfter = :purgeAfter, gsi4pk = :gsi4pk, gsi4sk = :gsi4sk, gsi5pk = :gsi5pk, gsi5sk = :gsi5sk REMOVE gsi1pk, gsi1sk",
+        ExpressionAttributeNames: { "#state": "state" },
+        ExpressionAttributeValues: {
+          ":file": "FILE", ":committed": "committed", ":trashed": "trashed",
+          ":deletedAt": deletedAt, ":purgeAfter": purgeAfter,
+          ":gsi4pk": `${pk}#TRASH`,
+          ":gsi4sk": `PURGE#${purgeAfter}#FILE#${fileId}`,
+          ":gsi5pk": "PURGE",
+          ":gsi5sk": `AT#${purgeAfter}#USER#${userId}#FILE#${fileId}`,
+        },
+        ReturnValues: "ALL_NEW",
+      }));
+      return result.Attributes as FileRecord | undefined;
+    } catch (error) {
+      if (!isConditionFailure(error)) throw error;
+      // A retry can lose the committed guard because the first request has
+      // already succeeded. Read the caller-scoped item to return that stable
+      // Trash view; every other state remains ineligible.
+      const current = await this.findFile(userId, fileId);
+      return current?.state === "trashed" ? current : undefined;
+    }
+  }
+
+  async listTrash(userId: string): Promise<FileRecord[]> {
+    const pk = `USER#${userId}`;
+    const out: FileRecord[] = [];
+    let cursor: Record<string, unknown> | undefined;
+    do {
+      const page = await this.doc.send(new QueryCommand({
+        TableName: this.tableName,
+        IndexName: "gsi4",
+        KeyConditionExpression: "gsi4pk = :gsi4pk",
+        FilterExpression: "pk = :pk AND #state = :trashed",
+        ExpressionAttributeNames: { "#state": "state" },
+        ExpressionAttributeValues: { ":gsi4pk": `${pk}#TRASH`, ":pk": pk, ":trashed": "trashed" },
+        ExclusiveStartKey: cursor as never,
+      }));
+      out.push(...((page.Items ?? []) as FileRecord[]));
+      cursor = page.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (cursor !== undefined);
+    return out;
+  }
+
+  async restoreFile(userId: string, fileId: string): Promise<FileRecord | undefined> {
+    const pk = `USER#${userId}`;
+    const existing = await this.findFile(userId, fileId);
+    if (existing === undefined || existing.state !== "trashed") return undefined;
+    try {
+      const result = await this.doc.send(new UpdateCommand({
+        TableName: this.tableName,
+        Key: { pk, sk: `FILE#${fileId}` },
+        // `purging` deliberately fails this guard: once the retention worker
+        // claims a due item, restoration may race an irreversible S3 delete.
+        ConditionExpression: "entity = :file AND #state = :trashed",
+        UpdateExpression: "SET #state = :committed, gsi1pk = :gsi1pk, gsi1sk = :gsi1sk REMOVE deletedAt, purgeAfter, gsi4pk, gsi4sk, gsi5pk, gsi5sk",
+        ExpressionAttributeNames: { "#state": "state" },
+        ExpressionAttributeValues: {
+          ":file": "FILE", ":trashed": "trashed", ":committed": "committed",
+          ":gsi1pk": `${pk}#PARENT#${existing.parentFolderId}`,
+          ":gsi1sk": existing.name,
+        },
+        ReturnValues: "ALL_NEW",
+      }));
+      return result.Attributes as FileRecord | undefined;
+    } catch (error) {
+      if (isConditionFailure(error)) return undefined;
+      throw error;
+    }
   }
 
   async getIdempotentResult(

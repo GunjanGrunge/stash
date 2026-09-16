@@ -14,6 +14,7 @@ function event(body: unknown, sub: string | null = USER): any {
       authorizer: sub === null ? {} : { jwt: { claims: { sub } } },
     },
     headers: {},
+    pathParameters: { id: "stash-1" },
     body: JSON.stringify(body),
   };
 }
@@ -47,6 +48,22 @@ function record(
 }
 
 describe("checkManifest", () => {
+  it("requires an owned open Stash when supplied a Stash lookup", async () => {
+    const repo = new MemoryManifestRepository();
+    const getStash = async (userId: string, stashId: string) =>
+      userId === USER && stashId === "stash-1" ? { state: "open" } : undefined;
+    const handler = checkManifest({ repo, stashes: { getStash } });
+    expect((await handler(event({ folderName: "Pack", entries: pack(1) }))).statusCode).toBe(200);
+    const foreign = event({ folderName: "Pack", entries: pack(1) });
+    foreign.pathParameters.id = "foreign";
+    expect((await handler(foreign)).statusCode).toBe(404);
+  });
+
+  it("rejects a closed owned Stash before checking its manifest", async () => {
+    const repo = new MemoryManifestRepository();
+    const handler = checkManifest({ repo, stashes: { getStash: async () => ({ state: "completed" }) } });
+    expect((await handler(event({ folderName: "Pack", entries: pack(1) }))).statusCode).toBe(409);
+  });
   it("returns exact for a manifest already stored, with counts and bytes", async () => {
     const repo = new MemoryManifestRepository();
     const entries = pack(5);

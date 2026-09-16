@@ -1,4 +1,5 @@
 import { DynamoRepository } from "../../handlers/files/src/dynamo-repository.js";
+import { DynamoStashRepository } from "../../handlers/stashes/src/dynamo-repository.js";
 import { registerFiles } from "../../handlers/files/src/register-files.js";
 import { TABLE_NAME, documentClient } from "./clients.js";
 
@@ -14,5 +15,6 @@ import { TABLE_NAME, documentClient } from "./clients.js";
  * and is never consulted.
  */
 const repo = new DynamoRepository(documentClient, TABLE_NAME);
+const stashes = new DynamoStashRepository(documentClient, TABLE_NAME);
 
-export const handler = registerFiles({ repo });
+export const handler = registerFiles({ repo, stashes });

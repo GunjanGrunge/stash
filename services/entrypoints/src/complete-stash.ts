@@ -1,5 +1,6 @@
 import { DynamoStashRepository } from "../../handlers/stashes/src/dynamo-repository.js";
 import { completeStash } from "../../handlers/stashes/src/complete-stash.js";
+import { DynamoManifestRepository } from "../../handlers/manifest/src/dynamo-repository.js";
 import { TABLE_NAME, documentClient } from "./clients.js";
 
 /**
@@ -12,5 +13,6 @@ import { TABLE_NAME, documentClient } from "./clients.js";
  * The repository is built ONCE at module scope so a warm invocation reuses it.
  */
 const repo = new DynamoStashRepository(documentClient, TABLE_NAME);
+const manifests = new DynamoManifestRepository(documentClient, TABLE_NAME);
 
-export const handler = completeStash({ repo });
+export const handler = completeStash({ repo, manifests });

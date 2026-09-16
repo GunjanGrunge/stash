@@ -278,6 +278,29 @@ describe("DynamoStashRepository.completeStash", () => {
     expect(items).toHaveLength(1);
   });
 
+  it("creates the verified MANIFEST in the SAME guarded completion transaction", async () => {
+    ddb.on(TransactWriteCommand).resolves({});
+    const manifest = {
+      pk: `USER#${USER}`, sk: "MANIFEST#h1", entity: "MANIFEST",
+      manifestHash: "h1", folderId: "folder-1", folderName: "Sample Pack",
+      fileCount: 1, totalBytes: 500,
+      entries: [{ relativePath: "kick.wav", sizeBytes: 500, checksum: "sum" }],
+    };
+
+    await repo().completeStash({
+      userId: USER, stashId: "s1", deltaBytes: 0,
+      committedCount: 1, committedBytes: 500, manifest,
+    });
+
+    const items = ddb.commandCalls(TransactWriteCommand)[0]!.args[0].input.TransactItems as any[];
+    expect(items).toHaveLength(2);
+    expect(items[0].Update.ConditionExpression).toContain("#state = :open");
+    expect(items[1].Put).toMatchObject({
+      TableName: TABLE, Item: manifest,
+      ConditionExpression: "attribute_not_exists(pk)",
+    });
+  });
+
   it("maps a lost guard to 409", async () => {
     ddb.on(TransactWriteCommand).rejects(cancelled(["ConditionalCheckFailed"]));
 

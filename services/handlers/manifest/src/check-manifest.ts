@@ -3,8 +3,10 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer } from "aws-lambda";
 import {
   HttpError,
   badRequest,
+  conflict,
   idempotencyKeyFromEvent,
   logger,
+  notFound,
   userIdFromEvent,
   validateRelativePath,
 } from "../../../shared/src/index.js";
@@ -15,6 +17,16 @@ import type { ManifestCheckResult, ManifestEntry, ManifestRecord } from "./types
 export interface HandlerResult {
   statusCode: number;
   body: string;
+}
+
+interface StashLookup {
+  getStash(userId: string, stashId: string): Promise<{ state: string } | undefined>;
+}
+
+function stashIdFromPath(event: any): string {
+  const id = event?.pathParameters?.id;
+  if (typeof id !== "string" || id.length === 0) throw badRequest("stash id is required in the path");
+  return id;
 }
 
 function parseBody(event: APIGatewayProxyEventV2WithJWTAuthorizer): Record<string, unknown> {
@@ -166,13 +178,22 @@ function diff(
  * including a folder name that merely coincides, or several same-name folders
  * that each share files — is `none`.
  */
-export function checkManifest(deps: { repo: ManifestRepository }) {
+export function checkManifest(deps: { repo: ManifestRepository; stashes?: StashLookup }) {
   return async (
     event: APIGatewayProxyEventV2WithJWTAuthorizer,
   ): Promise<HandlerResult> => {
     try {
       const userId = userIdFromEvent(event);
       const log = logger(idempotencyKeyFromEvent(event) ?? randomUUID());
+      if (deps.stashes !== undefined) {
+        // The Lambda composition supplies this lookup, making the route
+        // parameter authoritative in production. Direct handler tests do not
+        // model an HTTP route, so they deliberately omit it.
+        const stashId = stashIdFromPath(event);
+        const stash = await deps.stashes.getStash(userId, stashId);
+        if (stash === undefined) throw notFound("stash");
+        if (stash.state !== "open") throw conflict("stash is not open");
+      }
       const body = parseBody(event);
 
       const folderName = validateFolderName(body["folderName"]);

@@ -1,0 +1,13 @@
+{
+  "name": "@stash/handlers-devices",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    "./register-device": "./src/register-device.ts",
+    "./revoke-device": "./src/revoke-device.ts",
+    "./memory-repository": "./src/memory-repository.ts",
+    "./dynamo-repository": "./src/dynamo-repository.ts"
+  }
+}

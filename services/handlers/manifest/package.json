@@ -8,6 +8,7 @@
     "./check-manifest": "./src/check-manifest.ts",
     "./manifest-hash": "./src/manifest-hash.ts",
     "./memory-repository": "./src/memory-repository.ts",
+    "./dynamo-repository": "./src/dynamo-repository.ts",
     "./repository": "./src/repository.ts",
     "./types": "./src/types.ts"
   },

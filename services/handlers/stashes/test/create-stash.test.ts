@@ -18,7 +18,11 @@ function event(
       opts.idempotencyKey === undefined
         ? {}
         : { "Idempotency-Key": opts.idempotencyKey },
-    body: JSON.stringify(body),
+    body: JSON.stringify(
+      body !== null && typeof body === "object" && !Array.isArray(body)
+        ? { manifestFolderName: "Sample Pack", ...(body as Record<string, unknown>) }
+        : body,
+    ),
   };
 }
 

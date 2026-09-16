@@ -1,6 +1,19 @@
 # STASH — Plan Progress Log
 Plan: `_bmad-output/planning-artifacts/plans/2026-09-15-aws-control-plane-plan.md`
 
+## Manifest lifecycle repair — implementation accepted; integration pending — 2026-09-15
+
+Evidence: `task-manifest-writer-brief.md`, `task-manifest-writer-dispatch.md`,
+`task-manifest-writer-report.md`, `task-manifest-writer-reviewer-verdict.md`.
+The provisional Dynamo manifest adapter was moved into its owning manifest
+package and verified with adapter tests. The user approved a selected-root
+contract: Stash creation persists `manifestFolderName`; registration creates a
+server-owned stable root Folder; and completion persists only verified
+committed contents. Completion now includes the conditional MANIFEST put in
+the same DynamoDB transaction as state/quota reconciliation. Targeted
+transaction and adapter-backed exact/partial tests pass. Full unmodified
+suite verification remains pending. No AWS mutation.
+
 ## Task 1: Repository toolchain — complete — 2026-09-15T00:26:00Z
 Report: `_bmad-output/implementation-artifacts/sdd/task-1-report.md`
 Dispatch: `_bmad-output/implementation-artifacts/sdd/task-1-dispatch.md`; host=claude-code, subagent=`stash-task-1-toolchain`
@@ -177,3 +190,42 @@ condition. All five cost-allocation tags verified on the IAM role, DynamoDB
 table and S3 bucket. Shared-role deviation recorded as AFR-007 with a revisit
 trigger. Deploy NOT run — separate High-severity approval.
 Usage: 71,597 subagent tokens; 12 tool uses; 288s. Spawns used: 14/15.
+
+## Integration repair: root Vitest discovery boundary - complete - 2026-09-15
+
+Brief: `task-integration-vitest-discovery-brief.md`; dispatch:
+`task-integration-vitest-discovery-dispatch.md`; report:
+`task-integration-vitest-discovery-report.md`; reviewer verdict:
+`task-integration-vitest-discovery-reviewer-verdict.md`.
+
+Root Vitest had discovered the full nested `.claude/worktrees/dynamo-repository`
+repository and run all root tests twice. The root config now structurally excludes
+the `.claude` container while retaining glob discovery for `infra/` and
+`services/`. Focused guard: 1 file / 4 tests passed. Typecheck passed. Full
+suite: 35 files / 415 passed / 1 skipped, with zero `.claude/` paths. The
+requested 34-file baseline predates one concurrently added manifest test.
+## Task: BMM renderer selection — complete — 2026-09-15
+Report: `task-bmm-renderer-selection-report.md`
+Dispatch: `task-bmm-renderer-selection-dispatch.md`; Codex collaboration subagent `/root/bmm_renderer_fix`
+Reviewer notes: module-aware resolution confirmed; `bmad-build` renders using BMM.
+Usage: proxy — 1 spawn; 4 evidence files; no application files touched.
+
+## Trash lifecycle and retention — complete locally, deployment pending — 2026-09-16
+
+Briefs/reports: `task-trash-api-{brief,dispatch,report}.md` and
+`task-retention-infrastructure-{brief,dispatch,report}.md`; reviewer verdicts:
+`task-trash-api-reviewer-verdict.md` and
+`task-retention-infrastructure-reviewer-verdict.md`.
+
+The approved recoverable-delete design is implemented: `DELETE /files/{id}`
+moves committed files to Trash, `GET /trash` lists the caller's recoverable
+files, and `POST /files/{id}/restore` restores them. A dedicated retention
+stack performs retry-safe permanent deletion no sooner than 30 days later via
+a daily scheduled worker; it has its own narrow S3-delete role rather than
+expanding the shared application role.
+
+Clean-room combined gate: `npm ci` passed; full Vitest reported **40 files,
+444 passed, 1 skipped**; `npm run typecheck` passed; `npm run synth` passed
+with six stacks. Parsed synthesized API: **17 routes, 17 API functions**.
+No AWS deployment was run. The reachable API still has the previously deployed
+11-route version until the user separately authorizes deployment.

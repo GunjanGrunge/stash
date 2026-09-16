@@ -1,4 +1,4 @@
-import type { EntityRecord, FolderRecord } from "./types.js";
+import type { EntityRecord, FileRecord, FolderRecord } from "./types.js";
 
 /** A previously-returned handler outcome, replayed verbatim on retry. */
 export interface IdempotentResult {
@@ -37,6 +37,23 @@ export interface Repository {
 
   /** Existence check for a folder owned by this caller (cross-tenant → undefined). */
   findFolderById(userId: string, folderId: string): Promise<FolderRecord | undefined>;
+
+  /** A caller-scoped FILE lookup. A foreign id is indistinguishable from absent. */
+  findFile(userId: string, fileId: string): Promise<FileRecord | undefined>;
+
+  /** Atomically moves a committed caller-owned file to Trash. */
+  trashFile(
+    userId: string,
+    fileId: string,
+    deletedAt: string,
+    purgeAfter: string,
+  ): Promise<FileRecord | undefined>;
+
+  /** Lists only this caller's recoverable Trash records. */
+  listTrash(userId: string): Promise<FileRecord[]>;
+
+  /** Atomically restores a caller-owned recoverable Trash record. */
+  restoreFile(userId: string, fileId: string): Promise<FileRecord | undefined>;
 
   /** Replay support: the stored outcome of a previous (user, stash, key) call. */
   getIdempotentResult(

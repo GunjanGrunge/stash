@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  badRequest,
   idempotencyKeyFromEvent,
   logger,
   userIdFromEvent,
@@ -59,6 +60,10 @@ export function createStash(deps: { repo: StashRepository }) {
         body["manifestFileCount"] === undefined
           ? 0
           : requireByteCount(body["manifestFileCount"], "manifestFileCount");
+      const manifestFolderName = body["manifestFolderName"];
+      if (typeof manifestFolderName !== "string" || manifestFolderName.length === 0) {
+        throw badRequest("manifestFolderName must be a non-empty string");
+      }
 
       const stashId = randomUUID();
       const now = new Date().toISOString();
@@ -72,6 +77,7 @@ export function createStash(deps: { repo: StashRepository }) {
         committedCount: 0,
         reservedBytes: reserveBytes,
         committedBytes: 0,
+        manifestFolderName,
         startedAt: now,
         updatedAt: now,
       };

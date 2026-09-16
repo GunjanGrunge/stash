@@ -8,6 +8,8 @@ import {
 } from "../../../shared/src/index.js";
 import { errorResult, stashIdFromPath, type HandlerResult } from "./http.js";
 import type { StashRepository } from "./repository.js";
+import { manifestHash } from "../../manifest/src/manifest-hash.js";
+import type { ManifestRepository } from "../../manifest/src/repository.js";
 
 /**
  * POST /stashes/{id}/complete — finalize a Stash (spec §4 step 9).
@@ -32,7 +34,7 @@ import type { StashRepository } from "./repository.js";
  * The count-then-write sequence is made safe by the same `state = "open"`
  * guard `cancelStash` uses — a second complete loses it and reconciles nothing.
  */
-export function completeStash(deps: { repo: StashRepository }) {
+export function completeStash(deps: { repo: StashRepository; manifests?: ManifestRepository }) {
   return async (event: any): Promise<HandlerResult> => {
     try {
       const userId = userIdFromEvent(event);
@@ -75,17 +77,32 @@ export function completeStash(deps: { repo: StashRepository }) {
         }),
       };
 
+      let manifest: Record<string, unknown> | undefined;
+      if (deps.manifests !== undefined && stash.manifestFolderName !== undefined) {
+        const entries = committed.map((file) => ({ relativePath: file.originalRelativePath, sizeBytes: file.sizeBytes, checksum: file.checksum }));
+        const rootIds = new Set(committed.map((file) => file.rootFolderId));
+        if (entries.some((entry) => typeof entry.relativePath !== "string" || typeof entry.checksum !== "string") || rootIds.size !== 1 || rootIds.has(undefined)) {
+          throw new Error("verified committed files lack selected-root manifest metadata");
+        }
+        const folderId = [...rootIds][0]!;
+        const hash = manifestHash(stash.manifestFolderName, entries as any);
+        manifest = { pk: `USER#${userId}`, sk: `MANIFEST#${hash}`, entity: "MANIFEST", manifestHash: hash,
+          folderId, folderName: stash.manifestFolderName, fileCount: entries.length, totalBytes: committedBytes, entries };
+      }
+
       await deps.repo.completeStash({
         userId,
         stashId,
         deltaBytes,
         committedCount,
         committedBytes,
+        manifest,
         idempotency:
           idempotencyKey === undefined
             ? undefined
             : { key: idempotencyKey, result },
       });
+
 
       log.info("stash_completed", {
         stash_id: stashId,

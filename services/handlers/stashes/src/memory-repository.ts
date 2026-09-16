@@ -136,7 +136,7 @@ export class MemoryStashRepository implements StashRepository {
   async listStashFiles(userId: string, stashId: string): Promise<StashFileRef[]> {
     return [...this.files.values()]
       .filter((f) => f.userId === userId && f.stashId === stashId)
-      .map(({ fileId, state, sizeBytes }) => ({ fileId, state, sizeBytes }));
+      .map(({ fileId, state, sizeBytes, originalRelativePath, checksum, rootFolderId }) => ({ fileId, state, sizeBytes, originalRelativePath, checksum, rootFolderId }));
   }
 
   async deleteFiles(userId: string, fileIds: string[]): Promise<void> {

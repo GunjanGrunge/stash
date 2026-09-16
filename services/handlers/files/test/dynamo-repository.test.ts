@@ -5,6 +5,7 @@ import {
   GetCommand,
   QueryCommand,
   TransactWriteCommand,
+  UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import {
   ConditionalCheckFailedException,
@@ -261,5 +262,39 @@ describe("idempotency", () => {
   it("returns undefined for an unseen key", async () => {
     ddb.on(GetCommand).resolves({});
     expect(await repo().getIdempotentResult("u1", "s1", "never")).toBeUndefined();
+  });
+});
+
+describe("Trash persistence", () => {
+  it("moves a committed file atomically into both sparse retention indexes", async () => {
+    ddb.on(UpdateCommand).resolves({ Attributes: file({ state: "trashed", gsi1pk: undefined, gsi1sk: undefined, purgeAfter: "2026-01-31T00:00:00.000Z" }) });
+    const moved = await repo().trashFile("u1", "file-1", "2026-01-01T00:00:00.000Z", "2026-01-31T00:00:00.000Z");
+    expect(moved?.state).toBe("trashed");
+    const input = ddb.commandCalls(UpdateCommand)[0]!.args[0].input;
+    expect(input.ConditionExpression).toContain("committed");
+    expect(input.UpdateExpression).toContain("REMOVE gsi1pk, gsi1sk");
+    expect(JSON.stringify(input.ExpressionAttributeValues)).toContain("USER#u1#TRASH");
+    expect(JSON.stringify(input.ExpressionAttributeValues)).toContain("PURGE");
+  });
+
+  it("paginates the caller-scoped Trash index rather than scanning or truncating", async () => {
+    ddb.on(QueryCommand)
+      .resolvesOnce({ Items: [file({ fileId: "a", state: "trashed" })], LastEvaluatedKey: { pk: "next" } })
+      .resolvesOnce({ Items: [file({ fileId: "b", state: "trashed" })] });
+    expect((await repo().listTrash("u1")).map((item) => item.fileId)).toEqual(["a", "b"]);
+    const calls = ddb.commandCalls(QueryCommand);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.args[0].input.IndexName).toBe("gsi4");
+    expect(JSON.stringify(calls[0]!.args[0].input.ExpressionAttributeValues)).toContain("USER#u1#TRASH");
+  });
+
+  it("restores the original folder index only while the record remains trashed", async () => {
+    ddb.on(GetCommand).resolves({ Item: file({ state: "trashed" }) });
+    ddb.on(UpdateCommand).resolves({ Attributes: file({ state: "committed" }) });
+    expect((await repo().restoreFile("u1", "file-1"))?.state).toBe("committed");
+    const input = ddb.commandCalls(UpdateCommand)[0]!.args[0].input;
+    expect(input.ConditionExpression).toContain("trashed");
+    expect(input.UpdateExpression).toContain("gsi1pk");
+    expect(input.UpdateExpression).toContain("REMOVE deletedAt");
   });
 });

@@ -12,6 +12,13 @@ import { TRANSACT_ITEM_LIMIT } from "./dynamo-repository.js";
 import type { Repository } from "./repository.js";
 import type { EntityRecord, FileRecord, FolderRecord, RegisterFileInput } from "./types.js";
 
+interface SelectedRootLookup {
+  getStash(userId: string, stashId: string): Promise<{
+    state: string;
+    manifestFolderName?: string;
+  } | undefined>;
+}
+
 export interface HandlerResult {
   statusCode: number;
   body: string;
@@ -32,6 +39,14 @@ function parseBody(event: any): Record<string, unknown> {
     if (err instanceof HttpError) throw err;
     throw badRequest("request body must be valid JSON");
   }
+}
+
+function stashIdFromPath(event: any): string {
+  const id = event?.pathParameters?.id;
+  if (typeof id !== "string" || id.length === 0) {
+    throw badRequest("stash id is required in the path");
+  }
+  return id;
 }
 
 function errorResult(err: unknown): HandlerResult {
@@ -106,7 +121,7 @@ export function chunkByActionCost(
  * A replay of the same (userId, stashId, Idempotency-Key) returns the ORIGINAL
  * response without writing again (PRD §13: retries are guaranteed).
  */
-export function registerFiles(deps: { repo: Repository }) {
+export function registerFiles(deps: { repo: Repository; stashes?: SelectedRootLookup }) {
   return async (event: any): Promise<HandlerResult> => {
     try {
       const userId = userIdFromEvent(event);
@@ -117,6 +132,24 @@ export function registerFiles(deps: { repo: Repository }) {
       const stashId = body["stashId"];
       if (typeof stashId !== "string" || stashId.length === 0) {
         throw badRequest("stashId must be a non-empty string");
+      }
+
+      let selectedStash: { state: string; manifestFolderName?: string } | undefined;
+      if (deps.stashes !== undefined) {
+        // The entry point supplies this lookup. Only that deployed HTTP
+        // composition has a route parameter; direct handler tests exercise
+        // the domain operation without fabricating an API Gateway route.
+        const pathStashId = stashIdFromPath(event);
+        if (stashId !== pathStashId) {
+          throw badRequest("stashId must match the stash id in the path");
+        }
+        selectedStash = await deps.stashes.getStash(userId, stashId);
+        if (selectedStash === undefined || selectedStash.state !== "open") {
+          throw badRequest("stashId does not identify an open Stash");
+        }
+        if (selectedStash.manifestFolderName === undefined) {
+          throw badRequest("Stash has no selected root folder");
+        }
       }
 
       if (idempotencyKey !== undefined) {
@@ -174,12 +207,26 @@ export function registerFiles(deps: { repo: Repository }) {
       const newFolders: FolderRecord[] = [];
       const files: FileRecord[] = [];
 
+      let selectedRootId: string | null = null;
+      if (selectedStash?.manifestFolderName !== undefined) {
+        const existingRoot = await deps.repo.findFolder(userId, null, selectedStash.manifestFolderName);
+        if (existingRoot !== undefined) {
+          selectedRootId = existingRoot.folderId;
+        } else {
+          selectedRootId = randomUUID();
+          newFolders.push({ pk, sk: `FOLDER#${selectedRootId}`, entity: "FOLDER", folderId: selectedRootId,
+            name: selectedStash.manifestFolderName, parentFolderId: null,
+            relativePath: selectedStash.manifestFolderName, gsi1pk: `${pk}#PARENT#ROOT`,
+            gsi1sk: selectedStash.manifestFolderName });
+        }
+      }
+
       for (const input of inputs) {
         const segments = input.relativePath.split("/");
         const name = segments[segments.length - 1]!;
         const dirs = segments.slice(0, -1);
 
-        let parentFolderId: string | null = null;
+        let parentFolderId: string | null = selectedRootId;
         let prefix = "";
         for (const dir of dirs) {
           prefix = prefix === "" ? dir : `${prefix}/${dir}`;
@@ -219,6 +266,7 @@ export function registerFiles(deps: { repo: Repository }) {
           stashId,
           name,
           parentFolderId: parentFolderId ?? "ROOT",
+          rootFolderId: selectedRootId ?? "ROOT",
           originalRelativePath: input.relativePath,
           sizeBytes: input.sizeBytes,
           checksum: input.checksum,

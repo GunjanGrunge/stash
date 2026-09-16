@@ -5,6 +5,7 @@ import { StashDataStack } from "../lib/data-stack";
 import { StashIdentityStack } from "../lib/identity-stack";
 import { StashApiStack } from "../lib/api-stack";
 import { StashObservabilityStack } from "../lib/observability-stack";
+import { StashRetentionStack } from "../lib/retention-stack";
 
 /**
  * STASH CDK app entry point.
@@ -57,7 +58,12 @@ export function buildApp(): cdk.App {
   const observability = new StashObservabilityStack(
     app,
     "StashObservabilityStack",
-    { env: ENV, table: data.table },
+    {
+      env: ENV,
+      table: data.table,
+      // User-approved operational contact for beta cost and alarm alerts.
+      alertEmail: "gunjan37@hotmail.com",
+    },
   );
 
   new StashApiStack(app, "StashApiStack", {
@@ -68,6 +74,12 @@ export function buildApp(): cdk.App {
     bucket: data.bucket,
     role: appRole.role,
     logGroups: observability.handlerLogGroups,
+  });
+
+  new StashRetentionStack(app, "StashRetentionStack", {
+    env: ENV,
+    table: data.table,
+    bucket: data.bucket,
   });
 
   for (const [key, value] of Object.entries(APP_TAGS)) {

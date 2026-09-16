@@ -69,6 +69,12 @@ export function stashMetric(
  *    first, CloudFormation cannot then create the same name here.
  */
 const DEFAULT_HANDLER_NAMES: readonly string[] = [
+  "trash-file",
+  "list-trash",
+  "restore-file",
+  "get-file",
+  "register-device",
+  "revoke-device",
   "create-stash",
   "check-manifest",
   "register-files",

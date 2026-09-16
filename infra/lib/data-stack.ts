@@ -27,7 +27,10 @@ export class StashDataStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
-    for (const n of [1, 2, 3] as const) {
+    // gsi4 is each creator's recoverable Trash view. gsi5 is the sparse,
+    // global queue the retention worker uses to find files due for purge.
+    // File records omit both keys until they are moved to Trash.
+    for (const n of [1, 2, 3, 4, 5] as const) {
       this.table.addGlobalSecondaryIndex({
         indexName: `gsi${n}`,
         partitionKey: {

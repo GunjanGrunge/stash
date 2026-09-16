@@ -14,7 +14,10 @@
     "./abort-upload": "./src/abort-upload.ts",
     "./list-children": "./src/list-children.ts",
     "./list-stashes": "./src/list-stashes.ts",
-    "./get-usage": "./src/get-usage.ts"
+    "./get-usage": "./src/get-usage.ts",
+    "./get-file": "./src/get-file.ts",
+    "./register-device": "./src/register-device.ts",
+    "./revoke-device": "./src/revoke-device.ts"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1132.0",

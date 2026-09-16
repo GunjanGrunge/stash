@@ -1,6 +1,6 @@
 import { conflict } from "../../../shared/src/index.js";
 import type { IdempotentResult, Repository } from "./repository.js";
-import type { EntityRecord, FolderRecord } from "./types.js";
+import type { EntityRecord, FileRecord, FolderRecord } from "./types.js";
 
 /** Stable folder identity key: (pk, parentFolderId, name), raw UTF-8 bytes. */
 function folderIdentity(
@@ -50,7 +50,9 @@ export class MemoryRepository implements Repository {
     const pk = `USER#${userId}`;
     const gsi1pk = `${pk}#PARENT#${parentFolderId ?? "ROOT"}`;
     return this.items.filter(
-      (item) => item.pk === pk && item.gsi1pk === gsi1pk,
+      (item) => item.pk === pk && item.gsi1pk === gsi1pk &&
+        (item.entity !== "FILE" || item.state !== "trashed") &&
+        (item.entity !== "FILE" || item.state !== "purging"),
     );
   }
 
@@ -73,6 +75,52 @@ export class MemoryRepository implements Repository {
       (item): item is FolderRecord =>
         item.entity === "FOLDER" && item.pk === pk && item.folderId === folderId,
     );
+  }
+
+  async findFile(userId: string, fileId: string): Promise<FileRecord | undefined> {
+    const pk = `USER#${userId}`;
+    return this.items.find(
+      (item): item is FileRecord =>
+        item.entity === "FILE" && item.pk === pk && item.fileId === fileId,
+    );
+  }
+
+  async trashFile(userId: string, fileId: string, deletedAt: string, purgeAfter: string): Promise<FileRecord | undefined> {
+    const file = await this.findFile(userId, fileId);
+    if (file === undefined) return undefined;
+    if (file.state === "trashed") return file;
+    if (file.state !== "committed") return undefined;
+    file.state = "trashed";
+    file.deletedAt = deletedAt;
+    file.purgeAfter = purgeAfter;
+    delete file.gsi1pk;
+    delete file.gsi1sk;
+    file.gsi4pk = `USER#${userId}#TRASH`;
+    file.gsi4sk = `PURGE#${purgeAfter}#FILE#${file.fileId}`;
+    file.gsi5pk = "PURGE";
+    file.gsi5sk = `AT#${purgeAfter}#USER#${userId}#FILE#${file.fileId}`;
+    return file;
+  }
+
+  async listTrash(userId: string): Promise<FileRecord[]> {
+    return this.items.filter(
+      (item): item is FileRecord => item.entity === "FILE" && item.pk === `USER#${userId}` && item.state === "trashed",
+    );
+  }
+
+  async restoreFile(userId: string, fileId: string): Promise<FileRecord | undefined> {
+    const file = await this.findFile(userId, fileId);
+    if (file === undefined || file.state !== "trashed") return undefined;
+    file.state = "committed";
+    delete file.deletedAt;
+    delete file.purgeAfter;
+    delete file.gsi4pk;
+    delete file.gsi4sk;
+    delete file.gsi5pk;
+    delete file.gsi5sk;
+    file.gsi1pk = `${file.pk}#PARENT#${file.parentFolderId}`;
+    file.gsi1sk = file.name;
+    return file;
   }
 
   async getIdempotentResult(

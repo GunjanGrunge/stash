@@ -45,6 +45,8 @@ export interface CompleteStashInput {
   deltaBytes: number;
   committedCount: number;
   committedBytes: number;
+  /** Verified manifest to create in the same completion transaction. */
+  manifest?: Record<string, unknown>;
   idempotency?: { key: string; result: IdempotentResult };
 }
 

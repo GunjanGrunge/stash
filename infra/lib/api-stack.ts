@@ -99,6 +99,48 @@ interface RouteDefinition {
  */
 const ROUTES: readonly RouteDefinition[] = [
   {
+    name: "trash-file",
+    method: HttpMethod.DELETE,
+    path: "/files/{id}",
+    timeout: WRITE_TIMEOUT,
+    memoryMb: WRITE_MEMORY_MB,
+  },
+  {
+    name: "list-trash",
+    method: HttpMethod.GET,
+    path: "/trash",
+    timeout: READ_TIMEOUT,
+    memoryMb: READ_MEMORY_MB,
+  },
+  {
+    name: "restore-file",
+    method: HttpMethod.POST,
+    path: "/files/{id}/restore",
+    timeout: WRITE_TIMEOUT,
+    memoryMb: WRITE_MEMORY_MB,
+  },
+  {
+    name: "get-file",
+    method: HttpMethod.GET,
+    path: "/files/{id}",
+    timeout: READ_TIMEOUT,
+    memoryMb: READ_MEMORY_MB,
+  },
+  {
+    name: "register-device",
+    method: HttpMethod.POST,
+    path: "/devices",
+    timeout: WRITE_TIMEOUT,
+    memoryMb: WRITE_MEMORY_MB,
+  },
+  {
+    name: "revoke-device",
+    method: HttpMethod.DELETE,
+    path: "/devices/{id}",
+    timeout: WRITE_TIMEOUT,
+    memoryMb: WRITE_MEMORY_MB,
+  },
+  {
     name: "create-stash",
     method: HttpMethod.POST,
     path: "/stashes",

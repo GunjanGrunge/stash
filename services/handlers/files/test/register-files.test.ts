@@ -6,11 +6,16 @@ import type { FileRecord, FolderRecord } from "../src/types.js";
 const USER = "user-abc123";
 
 function event(body: unknown, sub: string | null = USER): any {
+  const stashId =
+    body !== null && typeof body === "object" && "stashId" in body
+      ? (body as { stashId?: unknown }).stashId
+      : undefined;
   return {
     requestContext: {
       authorizer: sub === null ? {} : { jwt: { claims: { sub } } },
     },
     headers: {},
+    pathParameters: { id: stashId },
     body: JSON.stringify(body),
   };
 }
@@ -140,5 +145,18 @@ describe("registerFiles", () => {
     );
     expect(res.statusCode).toBe(401);
     expect(repo.all()).toHaveLength(0);
+  });
+
+  it("rejects a body stashId that differs from the authoritative path id", async () => {
+    const repo = new MemoryRepository();
+    const stashes = {
+      getStash: async () => ({ state: "open", manifestFolderName: "Samples" }),
+    };
+    const request = event({ stashId: "body-stash", files: [{ relativePath: "a.wav", sizeBytes: 1, checksum: "c" }] });
+    request.pathParameters.id = "path-stash";
+    const res = await registerFiles({ repo, stashes })(request);
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).code).toBe("bad_request");
+    expect(repo.all()).toEqual([]);
   });
 });

@@ -1,6 +1,7 @@
 import { checkManifest } from "../../handlers/manifest/src/check-manifest.js";
+import { DynamoManifestRepository } from "../../handlers/manifest/src/dynamo-repository.js";
+import { DynamoStashRepository } from "../../handlers/stashes/src/dynamo-repository.js";
 import { TABLE_NAME, documentClient } from "./clients.js";
-import { DynamoManifestRepository } from "./manifest-repository.js";
 
 /**
  * Lambda entry point for `POST /stashes/{id}/manifest-check`.
@@ -13,5 +14,6 @@ import { DynamoManifestRepository } from "./manifest-repository.js";
  * path parameter is not consulted.
  */
 const repo = new DynamoManifestRepository(documentClient, TABLE_NAME);
+const stashes = new DynamoStashRepository(documentClient, TABLE_NAME);
 
-export const handler = checkManifest({ repo });
+export const handler = checkManifest({ repo, stashes });

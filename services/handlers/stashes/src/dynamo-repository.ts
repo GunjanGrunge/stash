@@ -261,6 +261,16 @@ export class DynamoStashRepository implements StashRepository {
       });
     }
 
+    if (input.manifest !== undefined) {
+      transactItems.push({
+        Put: {
+          TableName: this.tableName,
+          Item: input.manifest,
+          ConditionExpression: "attribute_not_exists(pk)",
+        },
+      });
+    }
+
     this.appendIdempotency(transactItems, input.userId, input.stashId, input.idempotency);
     await this.sendGuarded(transactItems, "stash is not open");
   }
@@ -290,11 +300,17 @@ export class DynamoStashRepository implements StashRepository {
         const fileId = item["fileId"];
         const state = item["state"];
         const sizeBytes = item["sizeBytes"];
+        const originalRelativePath = item["originalRelativePath"];
+        const checksum = item["checksum"];
+        const rootFolderId = item["rootFolderId"];
         if (typeof fileId !== "string" || typeof state !== "string") continue;
         out.push({
           fileId,
           state: state as StashFileRef["state"],
           sizeBytes: typeof sizeBytes === "number" ? sizeBytes : 0,
+          originalRelativePath: typeof originalRelativePath === "string" ? originalRelativePath : undefined,
+          checksum: typeof checksum === "string" ? checksum : undefined,
+          rootFolderId: typeof rootFolderId === "string" ? rootFolderId : undefined,
         });
       }
       cursor = page.LastEvaluatedKey as Record<string, unknown> | undefined;

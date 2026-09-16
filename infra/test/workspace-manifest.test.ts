@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import vitestConfig from "../../vitest.config";
 
 /**
  * Guards the reproducibility of a clean checkout.
@@ -63,6 +64,12 @@ function matches(pattern: string, dir: string): boolean {
 }
 
 describe("workspace manifest", () => {
+  it("keeps nested agent worktrees out of root test discovery", () => {
+    const testConfig = vitestConfig.test;
+    expect(testConfig?.include).toEqual(["**/*.test.ts"]);
+    expect(testConfig?.exclude).toContain("**/.claude/**");
+  });
+
   it("covers every package on disk, so npm ci installs all of them", () => {
     const patterns = rootWorkspaces();
     const onDisk = [...packageDirs("services"), ...packageDirs("infra", 0)];

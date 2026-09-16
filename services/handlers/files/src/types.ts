@@ -33,19 +33,26 @@ export interface FileRecord {
   stashId: string;
   name: string;
   parentFolderId: string;
+  /** Stable selected-root folder for this ingestion event. */
+  rootFolderId?: string;
   /** Rule 1: stored verbatim. Never normalized, trimmed or rewritten. */
   originalRelativePath: string;
   sizeBytes: number;
   checksum: string;
   /** Rule 6: `users/<user_id>/<file_id>` — opaque ids only. */
   objectKey: string;
-  state: "pending" | "uploading" | "committed" | "failed";
+  state: "pending" | "uploading" | "committed" | "failed" | "trashed" | "purging";
+  /** Set only while the file is recoverable in Trash. ISO-8601 UTC. */
+  deletedAt?: string;
+  /** Earliest instant the retention worker may permanently purge this file. */
+  purgeAfter?: string;
   /** Reserved for the later search scope — always [] here. */
   searchTokens: string[];
   /** Reserved for the later extraction scope — always {} here. */
   extractedMetadata: Record<string, unknown>;
-  gsi1pk: string;
-  gsi1sk: string;
+  /** Sparse while the record is in Trash or being permanently purged. */
+  gsi1pk?: string;
+  gsi1sk?: string;
   gsi2pk: string;
   gsi2sk: string;
   /** Rule 3: DETECTION only. A checksum match is never an identity match. */
@@ -57,6 +64,12 @@ export interface FileRecord {
    * files legitimately share one checksum, so the sort key is the fileId.
    */
   gsi3sk: string;
+  /** Sparse per-creator Trash listing index; absent outside Trash. */
+  gsi4pk?: string;
+  gsi4sk?: string;
+  /** Sparse global retention-work queue; absent outside Trash. */
+  gsi5pk?: string;
+  gsi5sk?: string;
 }
 
 export type EntityRecord = FolderRecord | FileRecord;

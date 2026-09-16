@@ -1,0 +1,14 @@
+{
+  "name": "@stash/handlers-retention",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/purge-trash.ts",
+  "exports": {
+    "./purge-trash": "./src/purge-trash.ts",
+    "./dynamo-repository": "./src/dynamo-repository.ts"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145"
+  }
+}
