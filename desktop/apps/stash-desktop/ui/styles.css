@@ -28,30 +28,55 @@
 
 body {
   margin: 0;
-  min-width: 1280px;
-  min-height: 720px;
   overflow: auto;
   background: var(--surface);
   color: var(--text);
   font-family: Inter, "Segoe UI", system-ui, sans-serif;
 }
 
+.titlebar {
+  display: flex;
+  height: 46px;
+  min-height: 46px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-card);
+  user-select: none;
+}
+
+.titlebar-brand { display: flex; min-width: 0; height: 100%; align-items: center; padding-inline: 1rem; }
+.titlebar-wordmark { display: block; width: 120px; }
+.titlebar-wordmark img { display: block; width: 100%; height: auto; }
+.window-controls { display: flex; align-self: stretch; }
+.window-control { display: grid; width: 46px; border: 0; place-items: center; background: transparent; color: var(--text); cursor: pointer; }
+.window-control svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-linecap: square; stroke-width: 1; }
+.window-control:hover { background: rgb(11 20 36 / 10%); }
+.window-control-close:hover { background: #c42b1c; color: var(--stash-white); }
+.window-control:focus-visible { position: relative; z-index: 1; outline: 3px solid var(--focus); outline-offset: -3px; }
+
 .welcome-shell {
   position: relative;
   display: grid;
-  min-height: 100vh;
-  padding: clamp(2rem, 6vw, 7rem);
-  place-items: center start;
+  min-height: calc(100vh - 46px);
+  padding: clamp(1.5rem, 6vw, 7rem);
+  place-items: center;
   isolation: isolate;
 }
 
-.art { position: absolute; inset: 0; z-index: -1; overflow: hidden; }
-.art picture, .art img { display: block; width: 100%; height: 100%; }
-.art img { object-fit: contain; object-position: center right; }
+.welcome-shell::before {
+  position: fixed;
+  z-index: -1;
+  width: min(54rem, 90vw);
+  height: min(54rem, 90vw);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgb(56 189 248 / 14%), rgb(124 58 237 / 7%) 42%, transparent 70%);
+  content: "";
+  pointer-events: none;
+}
 
 .welcome-card {
-  width: min(42rem, calc(100vw - clamp(4rem, 12vw, 14rem)));
-  min-width: 36rem;
+  width: min(42rem, 100%);
   padding: clamp(2rem, 4vw, 4rem);
   border: 1px solid var(--border);
   border-radius: 1.5rem;
@@ -59,8 +84,6 @@ body {
   box-shadow: 0 1.5rem 4rem rgb(11 20 36 / 18%);
 }
 
-.wordmark { display: block; width: 166px; margin-bottom: 3rem; }
-.wordmark img { display: block; width: 100%; height: auto; }
 .eyebrow { margin: 0 0 .75rem; color: var(--muted); font-size: 1rem; font-weight: 600; }
 h1 { max-width: 12ch; margin: 0; font-family: "Space Grotesk", Inter, "Segoe UI", system-ui, sans-serif; font-size: clamp(2.25rem, 3.4vw, 3.6rem); line-height: 1.05; letter-spacing: -.045em; }
 .value { max-width: 34rem; margin: 1.5rem 0 2rem; color: var(--muted); font-size: 1.0625rem; line-height: 1.55; }
@@ -71,9 +94,22 @@ h1 { max-width: 12ch; margin: 0; font-family: "Space Grotesk", Inter, "Segoe UI"
 .button:hover { filter: brightness(.95); }
 .button:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; }
 .account-status { min-height: 1.5rem; margin: 1.5rem 0 0; color: var(--muted); font-size: .9375rem; line-height: 1.45; }
+.account-status[data-tone="error"] { color: #c42b1c; }
+
+.signin-form { display: flex; flex-direction: column; gap: 1.25rem; margin-top: 1.5rem; }
+.field { display: flex; flex-direction: column; gap: .4rem; font-size: .9375rem; color: var(--text); }
+.field input { min-height: 2.75rem; padding: 0 .85rem; border: 1px solid var(--border); border-radius: .5rem; background: var(--surface); color: var(--text); font: 1rem/1 Inter, "Segoe UI", system-ui, sans-serif; }
+.field input:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
 
 @media (max-height: 760px) {
   .welcome-card { padding-block: 2rem; }
-  .wordmark { margin-bottom: 1.75rem; }
   .value { margin-block: 1rem 1.5rem; }
+}
+
+@media (max-width: 560px) {
+  .titlebar-brand { padding-inline: .75rem; }
+  .window-control { width: 42px; }
+  .welcome-shell { padding: 1rem; place-items: start center; }
+  .welcome-card { padding: 1.5rem; }
+  h1 { font-size: clamp(2rem, 10vw, 2.5rem); }
 }

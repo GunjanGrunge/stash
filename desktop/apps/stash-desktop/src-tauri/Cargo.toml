@@ -10,3 +10,7 @@ tauri-build = "2"
 
 [dependencies]
 tauri = { version = "2", features = [] }
+aws-config = { version = "1", default-features = false }
+aws-sdk-cognitoidentityprovider = "1"
+aws-cognito-srp = "0.2.5"
+serde = { version = "1", features = ["derive"] }

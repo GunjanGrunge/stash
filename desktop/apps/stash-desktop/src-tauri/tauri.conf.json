@@ -7,19 +7,22 @@
     "frontendDist": "../ui"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "STASH — Welcome / Sign in",
         "width": 1280,
         "height": 720,
-        "minWidth": 1280,
-        "minHeight": 720,
-        "resizable": false,
+        "minWidth": 480,
+        "minHeight": 480,
+        "resizable": true,
+        "maximizable": true,
+        "decorations": false,
         "center": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'none'; img-src 'self' asset: data:; style-src 'self'; script-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: data:; style-src 'self'; script-src 'self'"
     }
   },
   "bundle": {
