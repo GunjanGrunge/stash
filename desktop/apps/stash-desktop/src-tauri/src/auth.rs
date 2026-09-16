@@ -69,7 +69,11 @@ fn store_refresh_token(token: Option<&str>) -> Result<(), String> {
         "Cognito accepted the password but returned no refresh token.".to_string()
     })?;
     refresh_token_entry()?
-        .set_password(token)
+        // `set_password` converts text to UTF-16 before writing it. A rotated
+        // Cognito token can then exceed Credential Manager's small blob limit.
+        // It is opaque OAuth material, not a user password, so preserve it as
+        // its original UTF-8 bytes instead.
+        .set_secret(token.as_bytes())
         .map_err(|_| "STASH couldn't save your sign-in session.".to_string())
 }
 
@@ -244,9 +248,14 @@ pub async fn complete_new_password(
 
 #[tauri::command]
 pub async fn restore_session() -> Result<RestoreOutcome, String> {
-    let refresh_token = match refresh_token_entry()?.get_password() {
-        Ok(token) if !token.is_empty() => token,
+    let refresh_token = match refresh_token_entry()?.get_secret() {
+        Ok(bytes) => String::from_utf8(bytes)
+            .ok()
+            .filter(|token| !token.is_empty()),
         _ => return Ok(RestoreOutcome::SignedOut),
+    };
+    let Some(refresh_token) = refresh_token else {
+        return Ok(RestoreOutcome::SignedOut);
     };
     let response = cognito_client().await
         .get_tokens_from_refresh_token()
