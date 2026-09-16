@@ -45,6 +45,11 @@ function setStatus(element, message, tone) {
   else delete element.dataset.tone;
 }
 
+function showBrowserAfterSignIn() {
+  if (typeof window.dispatchEvent !== "function" || typeof window.CustomEvent !== "function") return;
+  window.dispatchEvent(new CustomEvent("stash:signed-in"));
+}
+
 document.querySelectorAll("[data-account-action]").forEach((action) => {
   action.addEventListener("click", () => {
     const kind = action.dataset.accountAction;
@@ -75,6 +80,7 @@ signinForm?.addEventListener("submit", async (event) => {
     const result = await invoke("sign_in", { username, password });
     if (result.outcome === "SignedIn") {
       setStatus(signinStatus, `Signed in as ${result.username}.`);
+      showBrowserAfterSignIn();
     } else if (result.outcome === "NewPasswordRequired") {
       pendingNewPassword = { session: result.session, username: result.username };
       setStatus(newPasswordStatus, "");
@@ -102,6 +108,7 @@ newPasswordForm?.addEventListener("submit", async (event) => {
     if (result.outcome === "SignedIn") {
       pendingNewPassword = null;
       setStatus(newPasswordStatus, `Signed in as ${result.username}.`);
+      showBrowserAfterSignIn();
     }
   } catch (error) {
     setStatus(newPasswordStatus, String(error), "error");

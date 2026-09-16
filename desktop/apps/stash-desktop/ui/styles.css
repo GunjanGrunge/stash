@@ -101,6 +101,33 @@ h1 { max-width: 12ch; margin: 0; font-family: "Space Grotesk", Inter, "Segoe UI"
 .field input { min-height: 2.75rem; padding: 0 .85rem; border: 1px solid var(--border); border-radius: .5rem; background: var(--surface); color: var(--text); font: 1rem/1 Inter, "Segoe UI", system-ui, sans-serif; }
 .field input:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
 
+.browser-screen { width: min(1100px, 100%); min-height: calc(100vh - 90px); display: grid; grid-template-columns: 220px 1fr; overflow: hidden; border: 1px solid var(--border); border-radius: 1rem; background: var(--surface-card); box-shadow: 0 1rem 3rem rgb(11 20 36 / 12%); }
+.browser-sidebar { display: flex; flex-direction: column; gap: 1rem; padding: 1.25rem; border-right: 1px solid var(--border); }
+.browser-nav { display: grid; gap: .35rem; }
+.nav-item { padding: .7rem .8rem; border: 0; border-radius: .45rem; background: transparent; color: var(--text); text-align: left; font: 600 .95rem/1.2 Inter, sans-serif; cursor: pointer; }
+.nav-item:hover, .nav-item.is-active { background: rgb(56 189 248 / 14%); }
+.mount-card { margin-top: auto; padding-top: 1rem; border-top: 1px solid var(--border); }
+.mount-card p { margin: .3rem 0 .75rem; }
+.mount-card .button { width: 100%; font-size: .875rem; }
+.browser-content { min-width: 0; padding: 1.5rem; }
+.browser-toolbar { display: flex; align-items: end; justify-content: space-between; gap: 1rem; }
+.browser-toolbar h1 { max-width: none; font-size: clamp(1.8rem, 3vw, 2.7rem); }
+.breadcrumb { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .8rem; color: var(--muted); font-size: .875rem; }
+.breadcrumb button { border: 0; padding: 0; background: none; color: inherit; text-decoration: underline; cursor: pointer; }
+.usage { color: var(--muted); font-size: .875rem; white-space: nowrap; }
+.browser-status { min-height: 1.4rem; margin: 1.4rem 0 .6rem; color: var(--muted); }
+.browser-status[data-tone="error"] { color: #c42b1c; }
+.browser-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: .6rem; }
+.browser-table { width: 100%; border-collapse: collapse; text-align: left; }
+.browser-table th, .browser-table td { padding: .8rem .9rem; border-bottom: 1px solid var(--border); }
+.browser-table th { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+.browser-table th button { border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.browser-table tbody tr { cursor: pointer; }
+.browser-table tbody tr:hover, .browser-table tbody tr.is-selected { background: rgb(56 189 248 / 10%); }
+.browser-table tbody tr:last-child td { border-bottom: 0; }
+.selection-details { min-height: 3rem; margin-top: 1rem; padding: .8rem; border: 1px solid var(--border); border-radius: .6rem; color: var(--muted); font-size: .875rem; }
+@media (max-width: 700px) { .browser-screen { grid-template-columns: 1fr; } .browser-sidebar { border-right: 0; border-bottom: 1px solid var(--border); } .browser-nav { grid-template-columns: 1fr 1fr; } .mount-card { margin-top: .5rem; } .browser-toolbar { align-items: start; flex-direction: column; } }
+
 @media (max-height: 760px) {
   .welcome-card { padding-block: 2rem; }
   .value { margin-block: 1rem 1.5rem; }

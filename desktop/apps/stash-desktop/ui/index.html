@@ -73,7 +73,32 @@
         </form>
         <p id="new-password-status" class="account-status" aria-live="polite"></p>
       </section>
+
+      <section id="browser-screen" class="browser-screen" hidden aria-labelledby="browser-heading">
+        <aside class="browser-sidebar" aria-label="STASH navigation">
+          <p class="eyebrow">Your STASH</p>
+          <nav class="browser-nav">
+            <button class="nav-item is-active" type="button" data-browser-nav="root">Library</button>
+            <button class="nav-item" type="button" data-browser-nav="recent">Recent Stashes</button>
+          </nav>
+          <div class="mount-card" aria-live="polite">
+            <p class="eyebrow">Mounted drive</p>
+            <p id="mount-status">Not mounted</p>
+            <button id="mount-action" class="button button-primary" type="button">Mount STASH</button>
+          </div>
+        </aside>
+        <section class="browser-content">
+          <div class="browser-toolbar">
+            <div><p class="eyebrow">Library</p><h1 id="browser-heading">Your files</h1><nav id="breadcrumb" class="breadcrumb" aria-label="Breadcrumb"></nav></div>
+            <div id="usage" class="usage" aria-live="polite"></div>
+          </div>
+          <p id="browser-status" class="browser-status" role="status" aria-live="polite"></p>
+          <div class="browser-table-wrap"><table class="browser-table"><thead><tr><th scope="col"><button type="button" data-sort="name">Name</button></th><th scope="col"><button type="button" data-sort="kind">Type</button></th><th scope="col"><button type="button" data-sort="size">Size</button></th></tr></thead><tbody id="file-list"></tbody></table></div>
+          <aside id="selection-details" class="selection-details" aria-live="polite">Select a file or folder to see its details.</aside>
+        </section>
+      </section>
     </main>
     <script src="welcome.js"></script>
+    <script src="post-signin.js"></script>
   </body>
 </html>

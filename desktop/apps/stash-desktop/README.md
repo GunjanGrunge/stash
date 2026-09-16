@@ -1,6 +1,8 @@
 # STASH desktop welcome shell
 
-This package is the isolated Windows Tauri shell for the **Welcome / Sign in** screen. It now wires real Cognito sign-in (via `src-tauri/src/auth.rs`); it still has no filesystem-adapter or mount integration.
+This package is the isolated Windows Tauri shell for the **Welcome / Sign in** and post-sign-in STASH file browser screens. Sign-in remains on the Rust side; the browser requests metadata and mount actions through Tauri IPC.
+
+The browser preserves the File/Folder hierarchy, shows breadcrumb navigation, loading/empty/error states, selection details, storage usage, and the mounted-drive status. This slice is metadata-only: payload bytes, filesystem writes, credentials, and leases remain outside the webview. Until the authenticated metadata IPC commands are connected to the core service, fixture or unavailable responses are expected; the UI never claims an upload or mount succeeded without a service response.
 
 ## Prerequisites
 
@@ -21,6 +23,7 @@ Run the static UI contract tests with:
 
 ```powershell
 node --test desktop/apps/stash-desktop/tests/welcome-contract.test.mjs
+node --test desktop/apps/stash-desktop/tests/post-signin-contract.test.mjs
 ```
 
 The Welcome window uses a custom, Windows-style title bar. Drag its empty left area; the right-side controls minimize, maximize/restore, and close the native window. Check each control with pointer and keyboard, maximize/restore the window, resize it with enlarged Windows text, tab through the controls and account actions, and inspect both system light and dark modes for focus visibility or overlap.
