@@ -16,6 +16,7 @@
     "./list-stashes": "./src/list-stashes.ts",
     "./get-usage": "./src/get-usage.ts",
     "./get-file": "./src/get-file.ts",
+    "./create-download-lease": "./src/create-download-lease.ts",
     "./register-device": "./src/register-device.ts",
     "./revoke-device": "./src/revoke-device.ts"
   },

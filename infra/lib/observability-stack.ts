@@ -69,6 +69,7 @@ export function stashMetric(
  *    first, CloudFormation cannot then create the same name here.
  */
 const DEFAULT_HANDLER_NAMES: readonly string[] = [
+  "create-download-lease",
   "trash-file",
   "list-trash",
   "restore-file",

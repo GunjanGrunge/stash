@@ -98,6 +98,7 @@ interface RouteDefinition {
  * synthesize the event themselves.
  */
 const ROUTES: readonly RouteDefinition[] = [
+  { name: "create-download-lease", method: HttpMethod.POST, path: "/files/{id}/download-url", timeout: READ_TIMEOUT, memoryMb: READ_MEMORY_MB },
   {
     name: "trash-file",
     method: HttpMethod.DELETE,

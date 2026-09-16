@@ -1,0 +1,8 @@
+[package]
+name = "stash-windows-fs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+stash-core = { path = "../stash-core" }
+
