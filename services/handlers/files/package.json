@@ -7,6 +7,7 @@
   "exports": {
     "./register-files": "./src/register-files.ts",
     "./get-file": "./src/get-file.ts",
+    "./create-download-lease": "./src/create-download-lease.ts",
     "./list-children": "./src/list-children.ts",
     "./memory-repository": "./src/memory-repository.ts",
     "./dynamo-repository": "./src/dynamo-repository.ts",

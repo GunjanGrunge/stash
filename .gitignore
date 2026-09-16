@@ -23,3 +23,6 @@ node_modules/
 
 # CDK synth output
 cdk.out/
+
+# Rust build output (desktop/ Cargo workspace)
+target/

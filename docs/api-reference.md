@@ -16,6 +16,7 @@ Errors are `{ "code": string, "message": string }`: `400` invalid input or confl
 | `POST /stashes/{id}/cancel` | Cancel the Stash and release reservation. |
 | `GET /folders/{folderId}/children` | Read direct child folders/files. This endpoint does not currently paginate. |
 | `GET /files/{id}` | Storage-neutral asset detail: id, stash/folder/path metadata, size, checksum, state, search metadata. No object key or URL. |
+| `POST /files/{id}/download-url` | Returns `{ url, expiresInSeconds }` for a caller-owned committed file. The short-lived URL is a bearer secret: retain it only in memory and never log it. Missing, foreign, trashed, purging, pending, uploading, and failed files all return `404`. |
 | `DELETE /files/{id}` | Move one committed caller-owned file to Trash. Returns `{ id, state: "trashed", purgeAfter }`. Repeating the request returns the same view. It does not delete bytes or change quota. |
 | `GET /trash` | Lists the caller's recoverable trashed files as `{ items: [{ id, state, purgeAfter }] }`. |
 | `POST /files/{id}/restore` | Restore a caller-owned file from Trash before the retention worker has started purging it. Returns `{ id, state: "committed" }`. |
