@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "STASH",
+  "version": "0.1.0",
+  "identifier": "com.stash.desktop",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "STASH — Welcome / Sign in",
+        "width": 1280,
+        "height": 720,
+        "minWidth": 480,
+        "minHeight": 480,
+        "resizable": true,
+        "maximizable": true,
+        "decorations": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: data:; style-src 'self'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["../../../../brand/icons/windows/STASH.ico"]
+  }
+}

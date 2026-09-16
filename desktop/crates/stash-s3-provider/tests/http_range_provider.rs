@@ -33,7 +33,12 @@ fn start_range_server(body: &'static [u8]) -> String {
                 None => (0, body.len() - 1),
             };
             let chunk = body[start..=end].to_vec();
-            let response = tiny_http::Response::from_data(chunk).with_status_code(206);
+            let content_range = format!("bytes {start}-{end}/{}", body.len());
+            let response = tiny_http::Response::from_data(chunk)
+                .with_status_code(206)
+                .with_header(
+                    tiny_http::Header::from_bytes("Content-Range", content_range).unwrap(),
+                );
             let _ = request.respond(response);
         }
     });

@@ -1,0 +1,16 @@
+[package]
+name = "stash-desktop"
+version = "0.1.0"
+description = "STASH Welcome / Sign in desktop shell"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = "2"
+
+[dependencies]
+tauri = { version = "2", features = [] }
+aws-config = { version = "1", default-features = false }
+aws-sdk-cognitoidentityprovider = "1"
+aws-cognito-srp = "0.2.5"
+serde = { version = "1", features = ["derive"] }

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>STASH — Welcome / Sign in</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="titlebar" data-window-drag-region>
+      <div class="titlebar-brand">
+        <picture class="titlebar-wordmark">
+          <source media="(prefers-color-scheme: dark)" srcset="assets/STASH_primary_dark.svg" />
+          <img src="assets/STASH_primary_light.svg" alt="STASH" />
+        </picture>
+      </div>
+      <div class="window-controls" aria-label="Window controls">
+        <button class="window-control" type="button" data-window-action="minimize" aria-label="Minimize window" title="Minimize">
+          <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1 5h8" /></svg>
+        </button>
+        <button class="window-control" type="button" data-window-action="toggle-maximize" aria-label="Maximize or restore window" title="Maximize or restore">
+          <svg viewBox="0 0 10 10" aria-hidden="true"><rect x="1.5" y="1.5" width="7" height="7" /></svg>
+        </button>
+        <button class="window-control window-control-close" type="button" data-window-action="close" aria-label="Close window" title="Close">
+          <svg viewBox="0 0 10 10" aria-hidden="true"><path d="m1.5 1.5 7 7m0-7-7 7" /></svg>
+        </button>
+      </div>
+    </header>
+    <main class="welcome-shell" aria-labelledby="welcome-heading">
+      <section class="welcome-card">
+        <p class="eyebrow">Welcome</p>
+        <h1 id="welcome-heading">Your creator library, right where you work.</h1>
+        <p class="value">Stash it when you need room. Keep your folder structure intact, find your assets, and use them anywhere.</p>
+        <div class="actions" aria-label="Account actions">
+          <button class="button button-primary" type="button" data-account-action="sign-in">Sign in</button>
+          <button class="button button-secondary" type="button" data-account-action="create-account">Create account</button>
+        </div>
+        <p id="account-status" class="account-status" aria-live="polite">Account connection is coming next. These actions do not sign you in yet.</p>
+      </section>
+
+      <section id="signin-card" class="welcome-card" hidden>
+        <p class="eyebrow">Sign in</p>
+        <h1>Welcome back.</h1>
+        <form id="signin-form" class="signin-form" novalidate>
+          <label class="field">
+            <span>Username</span>
+            <input id="signin-username" name="username" type="text" autocomplete="username" required />
+          </label>
+          <label class="field">
+            <span>Password</span>
+            <input id="signin-password" name="password" type="password" autocomplete="current-password" required />
+          </label>
+          <div class="actions">
+            <button class="button button-primary" type="submit">Sign in</button>
+            <button class="button button-secondary" type="button" data-account-action="cancel-sign-in">Back</button>
+          </div>
+        </form>
+        <p id="signin-status" class="account-status" aria-live="polite"></p>
+      </section>
+
+      <section id="new-password-card" class="welcome-card" hidden>
+        <p class="eyebrow">Set a new password</p>
+        <h1>This account needs a new password.</h1>
+        <p class="value">Your account was created with a temporary password. Choose a new one to finish signing in.</p>
+        <form id="new-password-form" class="signin-form" novalidate>
+          <label class="field">
+            <span>New password</span>
+            <input id="new-password" name="new-password" type="password" autocomplete="new-password" required minlength="8" />
+          </label>
+          <div class="actions">
+            <button class="button button-primary" type="submit">Set password and sign in</button>
+          </div>
+        </form>
+        <p id="new-password-status" class="account-status" aria-live="polite"></p>
+      </section>
+    </main>
+    <script src="welcome.js"></script>
+  </body>
+</html>

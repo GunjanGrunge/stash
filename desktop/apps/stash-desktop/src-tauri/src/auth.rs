@@ -1,0 +1,165 @@
+//! Cognito sign-in for the STASH desktop shell.
+//!
+//! Runs entirely from the Rust side: the webview never talks to Cognito
+//! directly, only calling these Tauri commands over IPC. The window's CSP
+//! only had to widen by the one narrow exception Tauri's own IPC transport
+//! needs (`http://ipc.localhost`) — it still blocks the webview from
+//! reaching Cognito, AWS, or anything else directly. No AWS access key is
+//! used or needed here — Cognito's
+//! `InitiateAuth`/`RespondToAuthChallenge` are called with only the User
+//! Pool ID and App Client ID, both public, non-secret identifiers (per the
+//! project's own rule: no permanent AWS credentials distributed to a
+//! client).
+//!
+//! This pool is SRP-only (no plaintext password auth flow, no app-client
+//! secret), so the flow is: compute SRP_A, InitiateAuth(USER_SRP_AUTH),
+//! verify against the returned SRP_B/salt, RespondToAuthChallenge
+//! (PASSWORD_VERIFIER). A user created via admin-create-user starts in
+//! FORCE_CHANGE_PASSWORD, so Cognito answers with a NEW_PASSWORD_REQUIRED
+//! challenge instead of tokens on first sign-in; `complete_new_password`
+//! answers that second challenge.
+//!
+//! Deliberately out of scope for this slice: persisting tokens (keychain or
+//! otherwise) and refresh — this only proves sign-in succeeds.
+use aws_cognito_srp::{SrpClient, User, VerificationParameters};
+use aws_sdk_cognitoidentityprovider::Client;
+use aws_sdk_cognitoidentityprovider::config::{Credentials, Region};
+use aws_sdk_cognitoidentityprovider::types::{AuthFlowType, ChallengeNameType};
+use serde::Serialize;
+
+const REGION: &str = "ap-south-1";
+const USER_POOL_ID: &str = "ap-south-1_0ELYEOOy0";
+const CLIENT_ID: &str = "6ovr480b8f4lhuvdvvonsk8atp";
+
+#[derive(Serialize)]
+#[serde(tag = "outcome")]
+pub enum AuthOutcome {
+    SignedIn { username: String },
+    NewPasswordRequired { session: Option<String>, username: String },
+}
+
+async fn cognito_client() -> Client {
+    // These operations are unauthenticated (unsigned) Cognito public APIs;
+    // the placeholder credentials below are never sent anywhere and never
+    // used to sign a request.
+    let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .region(Region::new(REGION))
+        .credentials_provider(Credentials::new(
+            "unused",
+            "unused",
+            None,
+            None,
+            "stash-desktop-unauthenticated-cognito-calls",
+        ))
+        .load()
+        .await;
+    Client::new(&config)
+}
+
+#[tauri::command]
+pub async fn sign_in(username: String, password: String) -> Result<AuthOutcome, String> {
+    let cognito = cognito_client().await;
+    let srp = SrpClient::new(User::new(USER_POOL_ID, &username, &password), CLIENT_ID, None);
+    let params = srp.get_auth_parameters();
+
+    let initiate = cognito
+        .initiate_auth()
+        .client_id(CLIENT_ID)
+        .auth_flow(AuthFlowType::UserSrpAuth)
+        .auth_parameters("USERNAME", params.username)
+        .auth_parameters("SRP_A", params.a)
+        .send()
+        .await
+        .map_err(|err| format!("Couldn't start sign-in: {err:?}"))?;
+
+    let challenge_params = initiate.challenge_parameters.unwrap_or_default();
+    // A session token is not always present — for the single-round-trip
+    // PASSWORD_VERIFIER challenge, continuity lives inside the opaque
+    // SECRET_BLOCK instead. Only later challenges (e.g. NEW_PASSWORD_REQUIRED)
+    // reliably need one carried forward, so this stays optional here.
+    let session = initiate.session;
+
+    let secret_block = challenge_params
+        .get("SECRET_BLOCK")
+        .ok_or_else(|| "Cognito's challenge was missing SECRET_BLOCK.".to_string())?;
+    let salt = challenge_params
+        .get("SALT")
+        .ok_or_else(|| "Cognito's challenge was missing SALT.".to_string())?;
+    let srp_b = challenge_params
+        .get("SRP_B")
+        .ok_or_else(|| "Cognito's challenge was missing SRP_B.".to_string())?;
+    let user_id = challenge_params
+        .get("USER_ID_FOR_SRP")
+        .ok_or_else(|| "Cognito's challenge was missing USER_ID_FOR_SRP.".to_string())?;
+
+    let VerificationParameters { password_claim_secret_block, password_claim_signature, timestamp } =
+        srp.verify(secret_block, user_id, salt, srp_b)
+            .map_err(|err| format!("Couldn't verify the password: {err}"))?;
+
+    let response = cognito
+        .respond_to_auth_challenge()
+        .client_id(CLIENT_ID)
+        .challenge_name(ChallengeNameType::PasswordVerifier)
+        .set_session(session)
+        .challenge_responses("USERNAME", user_id.clone())
+        .challenge_responses("PASSWORD_CLAIM_SECRET_BLOCK", password_claim_secret_block)
+        .challenge_responses("PASSWORD_CLAIM_SIGNATURE", password_claim_signature)
+        .challenge_responses("TIMESTAMP", timestamp)
+        .send()
+        .await
+        .map_err(|err| describe_challenge_error(&err))?;
+
+    if let Some(challenge) = &response.challenge_name {
+        return if *challenge == ChallengeNameType::NewPasswordRequired {
+            Ok(AuthOutcome::NewPasswordRequired { session: response.session, username })
+        } else {
+            Err(format!("Cognito asked for an unsupported next step: {challenge:?}"))
+        };
+    }
+
+    if response.authentication_result.is_some() {
+        Ok(AuthOutcome::SignedIn { username })
+    } else {
+        Err("Cognito accepted the password but returned no tokens.".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn complete_new_password(
+    username: String,
+    new_password: String,
+    session: Option<String>,
+) -> Result<AuthOutcome, String> {
+    let cognito = cognito_client().await;
+    let response = cognito
+        .respond_to_auth_challenge()
+        .client_id(CLIENT_ID)
+        .challenge_name(ChallengeNameType::NewPasswordRequired)
+        .set_session(session)
+        .challenge_responses("USERNAME", username.clone())
+        .challenge_responses("NEW_PASSWORD", new_password)
+        .send()
+        .await
+        .map_err(|err| describe_challenge_error(&err))?;
+
+    if response.authentication_result.is_some() {
+        Ok(AuthOutcome::SignedIn { username })
+    } else {
+        Err("Cognito accepted the new password but returned no tokens.".to_string())
+    }
+}
+
+/// Maps a few common, actionable Cognito errors to plain messages. Anything
+/// else falls back to the SDK's own debug output rather than hiding it.
+fn describe_challenge_error<E: std::fmt::Debug>(err: &E) -> String {
+    let debug = format!("{err:?}");
+    if debug.contains("NotAuthorizedException") {
+        "Incorrect username or password.".to_string()
+    } else if debug.contains("UserNotFoundException") {
+        "No account found for that username.".to_string()
+    } else if debug.contains("InvalidPasswordException") {
+        "That password doesn't meet the account's password requirements.".to_string()
+    } else {
+        debug
+    }
+}

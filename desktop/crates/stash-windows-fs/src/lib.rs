@@ -23,9 +23,8 @@
 use stash_core::{Cache, RangeProvider, ReadError};
 use std::ffi::c_void;
 use windows::Win32::Foundation::{
-    STATUS_ACCESS_DENIED, STATUS_END_OF_FILE, STATUS_INVALID_DEVICE_REQUEST,
-    STATUS_IO_DEVICE_ERROR, STATUS_MEDIA_WRITE_PROTECTED, STATUS_NETWORK_UNREACHABLE,
-    STATUS_OBJECT_NAME_NOT_FOUND,
+    STATUS_ACCESS_DENIED, STATUS_INVALID_DEVICE_REQUEST, STATUS_IO_DEVICE_ERROR,
+    STATUS_MEDIA_WRITE_PROTECTED, STATUS_NETWORK_UNREACHABLE, STATUS_OBJECT_NAME_NOT_FOUND,
 };
 use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY};
 use winfsp::filesystem::{
@@ -53,7 +52,7 @@ impl<P: RangeProvider> StashFile<P> {
         Self {
             name: U16CString::from_str(name).expect("file name must not contain interior NUL"),
             size,
-            cache: Cache::new(segment_size, timeout),
+            cache: Cache::new(segment_size, timeout, size, 64 * 1024 * 1024),
             provider,
         }
     }
@@ -81,7 +80,7 @@ fn read_error_to_fsp(err: ReadError) -> FspError {
     let status = match err {
         ReadError::Offline | ReadError::Timeout => STATUS_NETWORK_UNREACHABLE,
         ReadError::LeaseExpired => STATUS_ACCESS_DENIED,
-        ReadError::Io | ReadError::Verification => STATUS_IO_DEVICE_ERROR,
+        ReadError::Io | ReadError::Range => STATUS_IO_DEVICE_ERROR,
     };
     FspError::NTSTATUS(status.0)
 }
@@ -144,10 +143,11 @@ impl<P: RangeProvider> StashFileSystemContext<P> {
         &'e self,
         after: Option<Vec<u16>>,
     ) -> impl Iterator<Item = (usize, &'e StashFile<P>)> {
-        self.entries
-            .iter()
-            .enumerate()
-            .filter(move |(_, entry)| after.as_deref().is_none_or(|after| entry.name.as_slice() > after))
+        self.entries.iter().enumerate().filter(move |(_, entry)| {
+            after
+                .as_deref()
+                .is_none_or(|after| entry.name.as_slice() > after)
+        })
     }
 
     /// Pure read: bytes for a known-good file index. `read()` (the trait
@@ -155,7 +155,7 @@ impl<P: RangeProvider> StashFileSystemContext<P> {
     fn read_file(&self, index: usize, buffer: &mut [u8], offset: u64) -> FspResult<u32> {
         let entry = &self.entries[index];
         if offset >= entry.size {
-            return Err(FspError::NTSTATUS(STATUS_END_OF_FILE.0));
+            return Ok(0);
         }
         let length = (buffer.len() as u64).min(entry.size - offset);
         let bytes = entry
@@ -213,7 +213,11 @@ impl<P: RangeProvider> FileSystemContext for StashFileSystemContext<P> {
 
     fn close(&self, _context: Self::FileContext) {}
 
-    fn get_file_info(&self, context: &Self::FileContext, file_info: &mut FileInfo) -> FspResult<()> {
+    fn get_file_info(
+        &self,
+        context: &Self::FileContext,
+        file_info: &mut FileInfo,
+    ) -> FspResult<()> {
         *file_info = match context {
             Handle::Root => self.root_file_info(),
             Handle::File(index) => self.file_info_for(*index),
@@ -271,7 +275,10 @@ impl<P: RangeProvider> FileSystemContext for StashFileSystemContext<P> {
         // Nominal 1 TB ceiling matches the PRD's private-beta per-user quota;
         // this mount reflects one user's committed files, not a real device.
         let total: u64 = 1_000_000_000_000;
-        let used: u64 = self.entries.iter().map(|e| e.size).sum();
+        let used: u64 = self
+            .entries
+            .iter()
+            .fold(0u64, |total, entry| total.saturating_add(entry.size));
         out_volume_info.total_size = total;
         out_volume_info.free_size = total.saturating_sub(used);
         out_volume_info.set_volume_label("STASH");
@@ -304,13 +311,15 @@ mod tests {
             let start = offset as usize;
             let end = (start + length as usize).min(self.data.len());
             let bytes = self.data[start..end].to_vec();
-            let sha256 = <sha2::Sha256 as sha2::Digest>::digest(&bytes).into();
-            Ok(stash_core::Segment { bytes, sha256 })
+            Ok(stash_core::Segment { bytes })
         }
     }
 
     fn one_file_context() -> StashFileSystemContext<FixedProvider> {
-        let provider = FixedProvider { data: b"hello stash world", calls: AtomicUsize::new(0) };
+        let provider = FixedProvider {
+            data: b"hello stash world",
+            calls: AtomicUsize::new(0),
+        };
         let file = StashFile::new("kick.wav", 18, 8, Duration::from_secs(2), provider);
         StashFileSystemContext::new(vec![file])
     }
@@ -334,7 +343,10 @@ mod tests {
     #[test]
     fn resolves_unknown_name_to_not_found() {
         let fs = one_file_context();
-        assert!(matches!(fs.resolve(&path("\\missing.wav")), Resolved::NotFound));
+        assert!(matches!(
+            fs.resolve(&path("\\missing.wav")),
+            Resolved::NotFound
+        ));
     }
 
     #[test]
@@ -350,8 +362,7 @@ mod tests {
     fn read_past_end_of_file_is_bounded_end_of_file_status() {
         let fs = one_file_context();
         let mut buffer = [0u8; 4];
-        let err = fs.read_file(0, &mut buffer, 100).unwrap_err();
-        assert_eq!(err.to_ntstatus(), STATUS_END_OF_FILE.0);
+        assert_eq!(fs.read_file(0, &mut buffer, 100).unwrap(), 0);
     }
 
     #[test]
@@ -362,7 +373,13 @@ mod tests {
                 Err(ReadError::Offline)
             }
         }
-        let file = StashFile::new("kick.wav", 18, 8, Duration::from_millis(50), OfflineProvider);
+        let file = StashFile::new(
+            "kick.wav",
+            18,
+            8,
+            Duration::from_millis(50),
+            OfflineProvider,
+        );
         let fs = StashFileSystemContext::new(vec![file]);
         let mut buffer = [0u8; 4];
         let err = fs.read_file(0, &mut buffer, 0).unwrap_err();
@@ -376,14 +393,20 @@ mod tests {
             1,
             8,
             Duration::from_secs(1),
-            FixedProvider { data: b"a", calls: AtomicUsize::new(0) },
+            FixedProvider {
+                data: b"a",
+                calls: AtomicUsize::new(0),
+            },
         );
         let b = StashFile::new(
             "b.wav",
             1,
             8,
             Duration::from_secs(1),
-            FixedProvider { data: b"b", calls: AtomicUsize::new(0) },
+            FixedProvider {
+                data: b"b",
+                calls: AtomicUsize::new(0),
+            },
         );
         let fs = StashFileSystemContext::new(vec![a, b]);
 
@@ -401,10 +424,14 @@ mod tests {
     #[test]
     fn get_security_by_name_matches_open_resolution() {
         let fs = one_file_context();
-        let root = fs.get_security_by_name(&path("\\"), None, |_| None).unwrap();
+        let root = fs
+            .get_security_by_name(&path("\\"), None, |_| None)
+            .unwrap();
         assert_eq!(root.attributes, FILE_ATTRIBUTE_DIRECTORY.0);
 
-        let file = fs.get_security_by_name(&path("\\kick.wav"), None, |_| None).unwrap();
+        let file = fs
+            .get_security_by_name(&path("\\kick.wav"), None, |_| None)
+            .unwrap();
         assert_eq!(file.attributes, FILE_ATTRIBUTE_READONLY.0);
 
         let missing = fs.get_security_by_name(&path("\\missing.wav"), None, |_| None);
