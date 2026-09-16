@@ -104,11 +104,21 @@ spike; deploy or install WinFsp without separate explicit approval.
   split into plain, crate-owned functions/methods that unit-test directly;
   the trait methods themselves are a thin, unverified-by-unit-test adapter
   on top. 8/8 unit tests passing, 0 warnings.
-- [ ] `desktop/tests/mount-spike/` -- the actual live mount (`STASH (S:)`)
-  plus the Explorer + creative-app manual verification is still open. This
-  is a separate, explicit step: mounting isn't a compile-time concern, and
-  the local test environment doesn't yet have a running mount binary wired
-  to the real `create-download-lease` backend route.
+- [x] Live mount proof (`desktop/crates/mount-spike`) -- mounted `STASH (S:)`
+  for real on 2026-09-16, backed by a local HTTP fixture server standing in
+  for S3 (no real AWS deployment yet — that's a separate step). `dir S:\`
+  listed `hello.txt` (203 bytes, ~1 TB free reported); `type S:\hello.txt`
+  returned the exact fixture content, proving the full path: WinFSP read
+  callback → `stash-windows-fs` → `Cache` → `HttpRangeProvider` → real HTTP
+  `Range` GET → SHA-256-verified bytes → back to the OS. One real-environment
+  finding: WinFsp's runtime installer does not put `winfsp-x64.dll` on
+  `PATH`, so the mount binary exits silently (no output at all) unless
+  WinFsp's `bin` directory is added to `PATH` first — documented in
+  `desktop/README.md`.
+- [ ] Explorer + a real installed creative application (not just `dir`/`type`)
+  is still open, along with proving this against the real
+  `create-download-lease` backend route instead of the local fixture, and
+  the offline/cache-miss bounded-failure case under simulated network loss.
 - [ ] `desktop/README.md` -- record Windows prerequisites, GPLv3 notices,
   WinFsp installation/run steps, and the Explorer + selected-tool evidence
   procedure. No installer or Tauri shell yet.
