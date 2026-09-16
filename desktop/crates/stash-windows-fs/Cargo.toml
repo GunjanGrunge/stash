@@ -5,4 +5,12 @@ edition = "2021"
 
 [dependencies]
 stash-core = { path = "../stash-core" }
+winfsp = "0.13.1"
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
+[build-dependencies]
+winfsp = { version = "0.13.1", features = ["delayload"] }
+
+[dev-dependencies]
+sha2 = "0.10"
 

@@ -1,0 +1,12 @@
+[package]
+name = "mount-spike"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+stash-core = { path = "../stash-core" }
+stash-s3-provider = { path = "../stash-s3-provider" }
+stash-windows-fs = { path = "../stash-windows-fs" }
+winfsp = "0.13.1"
+tiny_http = "0.12"
+ctrlc = "3"
