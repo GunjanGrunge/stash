@@ -6,8 +6,8 @@
 //!
 //! This is a manual verification tool, not an automated test: it mounts a
 //! real drive letter and blocks until Ctrl+C.
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -31,7 +31,10 @@ impl LeaseSource for FixedLease {
 /// spike proves the mount mechanism without needing AWS deployed yet.
 fn start_fixture_server(body: &'static [u8]) -> String {
     let server = tiny_http::Server::http("127.0.0.1:0").expect("failed to bind fixture server");
-    let addr = server.server_addr().to_ip().expect("fixture server has no IP address");
+    let addr = server
+        .server_addr()
+        .to_ip()
+        .expect("fixture server has no IP address");
     thread::spawn(move || {
         for request in server.incoming_requests() {
             let range = request
@@ -66,15 +69,20 @@ fn parse_range(value: &str, len: usize) -> (usize, usize) {
 fn main() {
     let _init = winfsp_init_or_die();
 
-    let body: &'static [u8] =
-        b"This file is served live through the STASH mount, from a local\r\n\
+    let body: &'static [u8] = b"This file is served live through the STASH mount, from a local\r\n\
 fixture server standing in for S3 (no real AWS deployment yet).\r\n\
 If you can read this in a text editor via S:\\hello.txt, the mount works.\r\n";
     let url = start_fixture_server(body);
     println!("Fixture server (stand-in for S3) listening at {url}");
 
     let provider = HttpRangeProvider::new(FixedLease(url));
-    let file = StashFile::new("hello.txt", body.len() as u64, 64, Duration::from_secs(5), provider);
+    let file = StashFile::new(
+        "hello.txt",
+        body.len() as u64,
+        64,
+        Duration::from_secs(5),
+        provider,
+    );
     let context = StashFileSystemContext::new(vec![file]);
 
     let mut volume_params = VolumeParams::new();

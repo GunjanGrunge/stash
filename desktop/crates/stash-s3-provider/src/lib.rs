@@ -1,78 +1,78 @@
-//! HTTP-backed `RangeProvider`: performs real `Range` GET requests against a
-//! short-lived S3 lease URL. Lease acquisition/renewal is delegated to a
-//! `LeaseSource` so this crate never talks to the control plane and never
-//! holds a credential or object key — only the URL the lease route already
-//! returned.
-use sha2::{Digest, Sha256};
 use stash_core::{RangeProvider, ReadError, Segment};
-use std::io::Read;
-use std::sync::Mutex;
-use std::time::Duration;
-
-/// Supplies and renews the short-lived S3 GET URL. Implemented by the
-/// control-plane client layer.
+use std::{io::Read, sync::Mutex, time::Duration};
 pub trait LeaseSource: Send + Sync {
     fn current_url(&self) -> Result<String, ReadError>;
     fn renew(&self) -> Result<String, ReadError>;
 }
-
 pub struct HttpRangeProvider<L: LeaseSource> {
     lease: L,
     url: Mutex<Option<String>>,
     agent: ureq::Agent,
 }
-
 impl<L: LeaseSource> HttpRangeProvider<L> {
     pub fn new(lease: L) -> Self {
-        Self { lease, url: Mutex::new(None), agent: ureq::AgentBuilder::new().build() }
-    }
-
-    fn url(&self) -> Result<String, ReadError> {
-        let mut held = self.url.lock().unwrap();
-        if let Some(existing) = held.as_ref() {
-            return Ok(existing.clone());
+        Self {
+            lease,
+            url: Mutex::new(None),
+            agent: ureq::AgentBuilder::new().build(),
         }
-        let fresh = self.lease.current_url()?;
-        *held = Some(fresh.clone());
-        Ok(fresh)
     }
-
-    fn get_range(&self, url: &str, offset: u64, length: u64, timeout: Duration) -> Result<Vec<u8>, ReadError> {
-        let range = format!("bytes={}-{}", offset, offset + length - 1);
-        match self.agent.get(url).timeout(timeout).set("Range", &range).call() {
-            Ok(response) => {
-                let mut buf = Vec::with_capacity(length as usize);
-                response
-                    .into_reader()
-                    .take(length)
-                    .read_to_end(&mut buf)
+    fn url(&self) -> Result<String, ReadError> {
+        let mut u = self.url.lock().unwrap();
+        if let Some(v) = u.as_ref() {
+            return Ok(v.clone());
+        }
+        let v = self.lease.current_url()?;
+        *u = Some(v.clone());
+        Ok(v)
+    }
+    fn get(&self, url: &str, o: u64, l: u64, t: Duration) -> Result<Vec<u8>, ReadError> {
+        let end = o
+            .checked_add(l)
+            .and_then(|x| x.checked_sub(1))
+            .ok_or(ReadError::Range)?;
+        match self
+            .agent
+            .get(url)
+            .timeout(t)
+            .set("Range", &format!("bytes={o}-{end}"))
+            .call()
+        {
+            Ok(r) if r.status() == 206 => {
+                if !r
+                    .header("Content-Range")
+                    .is_some_and(|h| h.starts_with(&format!("bytes {o}-{end}/")))
+                {
+                    return Err(ReadError::Range);
+                }
+                let mut b = vec![];
+                r.into_reader()
+                    .take(l)
+                    .read_to_end(&mut b)
                     .map_err(|_| ReadError::Io)?;
-                Ok(buf)
+                if b.len() == l as usize {
+                    Ok(b)
+                } else {
+                    Err(ReadError::Io)
+                }
             }
-            // A lease past its TTL reads as a rejected/expired object URL, not a network fault.
-            Err(ureq::Error::Status(403, _)) | Err(ureq::Error::Status(404, _)) => Err(ReadError::LeaseExpired),
-            // Anything below the HTTP layer (refused connection, reset, timed-out socket) is
-            // reported as Offline: the mount cannot currently reach the asset, network-not-code.
-            Err(ureq::Error::Status(_, _)) | Err(ureq::Error::Transport(_)) => Err(ReadError::Offline),
+            Ok(_) => Err(ReadError::Range),
+            Err(ureq::Error::Status(403, _)) | Err(ureq::Error::Status(404, _)) => {
+                Err(ReadError::LeaseExpired)
+            }
+            Err(_) => Err(ReadError::Offline),
         }
     }
 }
-
 impl<L: LeaseSource> RangeProvider for HttpRangeProvider<L> {
-    fn fetch(&self, offset: u64, length: u64, timeout: Duration) -> Result<Segment, ReadError> {
-        let url = self.url()?;
-        let bytes = self.get_range(&url, offset, length, timeout)?;
-        // Self-consistency only (protects against a truncated/corrupted transfer within this
-        // call) — matches the existing test-mock convention in stash-core. This does not yet
-        // verify the bytes against the file's stored manifest checksum, which would require the
-        // caller to pass an expected hash through; tracked as a follow-up, not silently skipped.
-        let sha256 = Sha256::digest(&bytes).into();
-        Ok(Segment { bytes, sha256 })
+    fn fetch(&self, o: u64, l: u64, t: Duration) -> Result<Segment, ReadError> {
+        Ok(Segment {
+            bytes: self.get(&self.url()?, o, l, t)?,
+        })
     }
-
-    fn renew_lease(&self) -> Result<(), ReadError> {
-        let fresh = self.lease.renew()?;
-        *self.url.lock().unwrap() = Some(fresh);
+    fn renew_lease(&self, _: Duration) -> Result<(), ReadError> {
+        let v = self.lease.renew()?;
+        *self.url.lock().unwrap() = Some(v);
         Ok(())
     }
 }

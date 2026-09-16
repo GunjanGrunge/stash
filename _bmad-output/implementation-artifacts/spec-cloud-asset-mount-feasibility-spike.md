@@ -4,7 +4,7 @@ type: 'feature'
 created: '2026-09-16'
 status: 'in-progress'
 route: 'dispatch'
-review_loop_iteration: 0
+review_loop_iteration: 1
 baseline_commit: 'b03c206dd3af601a549aa6a0ee404b8b7379a597'
 context:
   - 'AGENT.md'
@@ -194,6 +194,28 @@ an actual live mount, and the Explorer/creative-app manual check.
 ## Spec Change Log
 
 ## Review Triage Log
+
+2026-09-16 independent review of `b03c206..a1ff80a`:
+
+| ID | Finding | Disposition | Rationale / next action |
+|---|---|---|---|
+| R1 | The provider self-hashes received bytes, so it does not verify them against a trusted value. | bad-spec | The current File record contains a whole-file checksum, not authenticated per-range digests. A meaningful segment check needs a manifest/segment-hash contract. Do not falsely claim segment integrity; obtain a product decision before extending the data model. |
+| R2 / E1 | A `200` or mismatched `Content-Range` response can be cached at the wrong offset. | patch | Require `206`, validate `Content-Range`, and reject malformed or mismatched ranges. |
+| R3 | Range-header arithmetic can overflow. | patch | Use checked interval arithmetic in provider and core. |
+| R4 | Core request interval arithmetic can overflow. | patch | Use checked interval arithmetic and return a bounded read error. |
+| R5 | Cache storage is unbounded and can grow to a full in-memory file. | patch | Add a strict byte budget and deterministic eviction; preserve cached-segment behavior. |
+| R6 | `step_by` narrows a `u64` segment size. | patch | Replace it with checked `u64` iteration and validate constructor arguments. |
+| R7 | A short interior HTTP response is silently cached. | patch | Validate byte count against the requested range, with an explicit final-segment bound from file metadata. |
+| R8 / E4 | The advertised case-insensitive volume performs case-sensitive lookup. | patch | Use one consistent Windows-oriented comparison for sorting, lookup, and collision rejection. |
+| R9 | Duplicate names (including case-only collisions) are ambiguous. | patch | Reject collisions when constructing the metadata entry table. |
+| R10 | Directory enumeration ignores a requested filename pattern. | patch | Apply the WinFsp pattern before appending entries, maintaining marker continuation. |
+| R11 | A read exactly at EOF returns an error rather than zero bytes. | patch | Return a successful zero-byte read at EOF. |
+| R12 | Reported used space can overflow. | patch | Use saturating accounting. |
+| E2 | Lease acquisition and renewal are not bounded by the read timeout. | patch | Put timeout in the lease-source contract and map timeout/failure to a bounded read error. |
+| E3 | One multi-segment read can renew a lease more than once. | patch | Track renewal once per logical cache read. |
+| V1 | Lease renewal/retry has no end-to-end cache/provider test. | patch | Add a test with an expired first URL, one renewal, and successful retry. |
+| V2 | Offline tests do not prove the configured timeout bound. | patch | Add a delayed local-server test with elapsed-time tolerance. |
+| V3 | WinFsp callback behavior lacks an automated OS-level test. | defer | Requires WinFsp runtime and an available drive letter in CI. Keep the live manual proof as an explicit, unclosed acceptance task and add a Windows-only test when the test environment can reserve these resources. |
 
 ## Design Notes
 
