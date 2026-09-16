@@ -21,9 +21,11 @@ test("browser renders explicit hierarchy labels and required states", async () =
 
 test("sign-in transition hides the pre-auth cards before showing the browser", async () => {
   const source = await read("../ui/post-signin.js");
+  const styles = await read("../ui/styles.css");
   assert.match(source, /querySelectorAll\("\.welcome-card"\)/);
   assert.match(source, /card\.hidden\s*=\s*true/);
   assert.match(source, /screen\.hidden\s*=\s*false/);
+  assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important/);
 });
 
 test("mount presentation includes the selected drive letter and persistent status", async () => {
