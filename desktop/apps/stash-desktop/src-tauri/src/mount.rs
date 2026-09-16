@@ -18,7 +18,7 @@ use stash_windows_fs::{StashFile, StashFileSystemContext};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use winfsp::host::{FileSystemHost, FileSystemParams, FineGuard, VolumeParams};
-use windows::Win32::System::LibraryLoader::LoadLibraryW;
+use windows::Win32::System::LibraryLoader::{LoadLibraryW, SetDllDirectoryW};
 
 const MOUNT_LETTER: &str = "S:";
 const SEGMENT_SIZE: u64 = 1 << 20; // 1 MiB
@@ -41,13 +41,19 @@ fn preload_winfsp() -> Result<(), String> {
     let roots = ["ProgramFiles(x86)", "ProgramFiles"];
     for variable in roots {
         let Some(root) = std::env::var_os(variable) else { continue };
-        let candidate = std::path::PathBuf::from(root)
+        let directory = std::path::PathBuf::from(root)
             .join("WinFsp")
-            .join("bin")
-            .join(WINFSP_DLL);
+            .join("bin");
+        let candidate = directory.join(WINFSP_DLL);
         if !candidate.is_file() {
             continue;
         }
+        let directory = windows::core::HSTRING::from(directory.as_os_str());
+        // The Rust binding uses a delay-loaded import by basename. Set this
+        // process's DLL directory so that resolver finds the installed DLL
+        // later, not just this explicit preload call.
+        unsafe { SetDllDirectoryW(&directory) }
+            .map_err(|err| format!("STASH couldn't configure the Windows drive service: {err}"))?;
         let path = windows::core::HSTRING::from(candidate.as_os_str());
         unsafe { LoadLibraryW(&path) }
             .map_err(|err| format!("STASH couldn't load the Windows drive service: {err}"))?;
