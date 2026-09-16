@@ -92,15 +92,23 @@ spike; deploy or install WinFsp without separate explicit approval.
   the Rust domain service with a range-provider port, verified segment cache,
   bounded timeout policy, and no UI dependency. Independently re-verified
   2026-09-16: `cargo test` 2/2 passing, no warnings.
-- [ ] `desktop/crates/stash-windows-fs/` and `desktop/tests/mount-spike/` --
-  add a WinFsp adapter that maps read/enumerate/stat to the core. Use a local
-  range-server fixture for automated tests and document the separately approved
-  live WinFsp/S3 manual run. **Partially done:** the local range-server fixture
-  and a real HTTP-backed `RangeProvider` now exist (`stash-s3-provider`), so the
-  transport half of this task is proven end-to-end. The actual WinFsp trait
-  wiring (read/enumerate/stat callbacks) is still open — that needs the
-  `winfsp` crate and native Windows, neither available in the environment this
-  slice was built in.
+- [x] `desktop/crates/stash-windows-fs/` -- WinFsp adapter that maps
+  read/enumerate/stat to the core, via `winfsp` 0.13.1. Built and tested
+  natively on Windows (Rust MSVC toolchain, WinFsp 2.1, LLVM/libclang
+  installed fresh in this session; WinFsp install explicitly approved by the
+  user). `open`/`get_security_by_name`/`read`/`read_directory`/`get_file_info`/
+  `get_volume_info` implemented for a flat, read-only root directory (no
+  subdirectories, no write path — out of scope for this spike). `winfsp`'s
+  `OpenFileInfo`/`DirMarker` types are only constructible by a live WinFSP
+  dispatcher, so the path-resolution and directory-enumeration logic was
+  split into plain, crate-owned functions/methods that unit-test directly;
+  the trait methods themselves are a thin, unverified-by-unit-test adapter
+  on top. 8/8 unit tests passing, 0 warnings.
+- [ ] `desktop/tests/mount-spike/` -- the actual live mount (`STASH (S:)`)
+  plus the Explorer + creative-app manual verification is still open. This
+  is a separate, explicit step: mounting isn't a compile-time concern, and
+  the local test environment doesn't yet have a running mount binary wired
+  to the real `create-download-lease` backend route.
 - [ ] `desktop/README.md` -- record Windows prerequisites, GPLv3 notices,
   WinFsp installation/run steps, and the Explorer + selected-tool evidence
   procedure. No installer or Tauri shell yet.
@@ -145,6 +153,33 @@ Verification: `cargo test --manifest-path desktop/Cargo.toml` — 5/5 passing
 (2 `stash-core`, 3 `stash-s3-provider`), 0 warnings, clean build. Toolchain
 installed fresh in this environment (`rustup`) to make this a real, run
 verification rather than an inspection-only claim.
+
+**2026-09-16 — WinFsp adapter (`stash-windows-fs`) implemented and tested.**
+Environment setup, natively on Windows (not WSL — `winfsp`'s dependency on
+the `windows` crate doesn't even type-check on Linux, confirmed by trying):
+Rust MSVC toolchain (`rustup` via winget), WinFsp 2.1 runtime (explicit user
+approval given before install, per Rule 11/the spec's own "never install
+WinFsp without separate approval" boundary), LLVM/libclang (required by
+`winfsp-sys`'s bindgen step) — none of these were present before this slice.
+
+`StashFileSystemContext<P: RangeProvider>` serves a flat, read-only root
+directory of `StashFile` entries, each with its own `Cache` (from
+`stash-core`) and `RangeProvider`. `ReadError` maps to NTSTATUS:
+`Offline`/`Timeout` → `STATUS_NETWORK_UNREACHABLE` (so Explorer/creative
+apps show a meaningful network-down state, not generic corruption);
+`Io`/`Verification` → `STATUS_IO_DEVICE_ERROR`; `LeaseExpired` →
+`STATUS_ACCESS_DENIED` (shouldn't normally surface — `Cache` already retries
+a lease renewal once internally).
+
+Verification: `cargo test --manifest-path desktop/Cargo.toml` — 13/13
+passing across the whole desktop workspace (2 `stash-core`, 3
+`stash-s3-provider`, 8 `stash-windows-fs`), 0 warnings, clean build. The
+WinFsp trait glue itself (`open`, `read_directory`) is *not* directly unit
+tested — `winfsp`'s `OpenFileInfo`/`DirMarker` can only be constructed by a
+live dispatcher — so it stays deliberately thin, with the meaningful logic
+(path resolution, directory-enumeration ordering, read bounds/error
+mapping) pulled into plain functions that are unit tested. Not yet done:
+an actual live mount, and the Explorer/creative-app manual check.
 
 ## Spec Change Log
 
