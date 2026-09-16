@@ -129,6 +129,13 @@ test("submitting sign-in invokes the sign_in command and shows success", async (
   assert.equal(elements["#signin-status"].textContent, "Signed in as person@example.com.");
 });
 
+test("a remembered session is restored only through Rust IPC", async () => {
+  const source = await read("../ui/welcome.js");
+  assert.match(source, /invoke\("restore_session"\)/);
+  assert.match(source, /result\?\.outcome === "SignedIn"/);
+  assert.doesNotMatch(source, /refresh.?token|password.*storage|localStorage/i);
+});
+
 test("a NEW_PASSWORD_REQUIRED outcome shows the new-password card, and completing it signs in", async () => {
   const { document, elements } = buildWelcomeDom();
   elements["#signin-username"].value = "person@example.com";

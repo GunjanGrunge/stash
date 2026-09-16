@@ -114,3 +114,15 @@ newPasswordForm?.addEventListener("submit", async (event) => {
     setStatus(newPasswordStatus, String(error), "error");
   }
 });
+
+// A remembered session is restored by Rust from Windows Credential Manager.
+// No password or token reaches this webview.
+(async () => {
+  if (!invoke) return;
+  try {
+    const result = await invoke("restore_session");
+    if (result?.outcome === "SignedIn") showBrowserAfterSignIn();
+  } catch (_) {
+    // Credential access failures leave the normal sign-in path available.
+  }
+})();

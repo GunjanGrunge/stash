@@ -10,6 +10,7 @@
   const details = document.querySelector("#selection-details");
   const mountStatus = document.querySelector("#mount-status");
   const mountAction = document.querySelector("#mount-action");
+  const signOutAction = document.querySelector("#signout-action");
   let parentId = "ROOT";
   let path = [];
   let items = [];
@@ -49,6 +50,12 @@
   function openFolder(id, nextPath) { parentId = id; path = nextPath; renderBreadcrumb(); loadChildren(); }
   document.querySelectorAll("[data-sort]").forEach((button) => button.addEventListener("click", () => { sortBy = button.dataset.sort; renderRows(); }));
   mountAction?.addEventListener("click", toggleMount);
+  signOutAction?.addEventListener("click", async () => {
+    if (!invoke) return;
+    signOutAction.disabled = true;
+    try { await invoke("sign_out"); window.location.reload(); }
+    catch (_) { signOutAction.disabled = false; setStatus("We couldn't sign you out. Try again.", "error"); }
+  });
   window.STASHBrowser = { show() { 
     // The browser is a full-screen authenticated view, not a panel below the
     // sign-in flow. Hide every pre-auth card before revealing it.

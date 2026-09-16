@@ -19,8 +19,9 @@
 //! challenge instead of tokens on first sign-in; `complete_new_password`
 //! answers that second challenge.
 //!
-//! Deliberately out of scope for this slice: persisting tokens (keychain or
-//! otherwise) and refresh — this only proves sign-in succeeds.
+//! A rotating Cognito refresh token is kept in Windows Credential Manager so
+//! the desktop app can restore a session after restart. The password and the
+//! short-lived ID token are never persisted.
 use aws_cognito_srp::{SrpClient, User, VerificationParameters};
 use aws_sdk_cognitoidentityprovider::config::{Credentials, Region};
 use aws_sdk_cognitoidentityprovider::types::{AuthFlowType, ChallengeNameType};
@@ -31,6 +32,8 @@ use std::sync::{Mutex, OnceLock};
 const REGION: &str = "ap-south-1";
 const USER_POOL_ID: &str = "ap-south-1_0ELYEOOy0";
 const CLIENT_ID: &str = "6ovr480b8f4lhuvdvvonsk8atp";
+const REFRESH_TOKEN_SERVICE: &str = "com.stash.desktop";
+const REFRESH_TOKEN_ACCOUNT: &str = "cognito-refresh-token";
 
 /// Short-lived access material is process-local only. It is deliberately not
 /// part of `AuthOutcome`, so Tauri never serializes it into the webview.
@@ -56,6 +59,24 @@ fn retain_id_token(token: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
+fn refresh_token_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(REFRESH_TOKEN_SERVICE, REFRESH_TOKEN_ACCOUNT)
+        .map_err(|_| "STASH couldn't access Windows Credential Manager.".to_string())
+}
+
+fn store_refresh_token(token: Option<&str>) -> Result<(), String> {
+    let token = token.filter(|value| !value.is_empty()).ok_or_else(|| {
+        "Cognito accepted the password but returned no refresh token.".to_string()
+    })?;
+    refresh_token_entry()?
+        .set_password(token)
+        .map_err(|_| "STASH couldn't save your sign-in session.".to_string())
+}
+
+fn clear_refresh_token() {
+    if let Ok(entry) = refresh_token_entry() { let _ = entry.delete_credential(); }
+}
+
 #[derive(Serialize)]
 #[serde(tag = "outcome")]
 pub enum AuthOutcome {
@@ -66,6 +87,33 @@ pub enum AuthOutcome {
         session: Option<String>,
         username: String,
     },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "outcome")]
+pub enum RestoreOutcome { SignedIn, SignedOut }
+
+fn retain_initial_session(
+    result: &aws_sdk_cognitoidentityprovider::types::AuthenticationResultType,
+) -> Result<(), String> {
+    retain_id_token(result.id_token())?;
+    store_refresh_token(result.refresh_token())
+}
+
+fn retain_restored_session(
+    result: &aws_sdk_cognitoidentityprovider::types::AuthenticationResultType,
+) -> Result<(), String> {
+    retain_id_token(result.id_token())?;
+    // Rotation normally supplies a replacement refresh token. If a provider
+    // ever omits it, retain the existing Credential Manager entry instead of
+    // throwing away a still-valid remembered session.
+    if result
+        .refresh_token()
+        .is_some_and(|token| !token.is_empty())
+    {
+        store_refresh_token(result.refresh_token())?;
+    }
+    Ok(())
 }
 
 async fn cognito_client() -> Client {
@@ -161,7 +209,7 @@ pub async fn sign_in(username: String, password: String) -> Result<AuthOutcome, 
     }
 
     if let Some(result) = response.authentication_result.as_ref() {
-        retain_id_token(result.id_token())?;
+        retain_initial_session(result)?;
         Ok(AuthOutcome::SignedIn { username })
     } else {
         Err("Cognito accepted the password but returned no tokens.".to_string())
@@ -187,11 +235,42 @@ pub async fn complete_new_password(
         .map_err(|err| describe_challenge_error(&err))?;
 
     if let Some(result) = response.authentication_result.as_ref() {
-        retain_id_token(result.id_token())?;
+        retain_initial_session(result)?;
         Ok(AuthOutcome::SignedIn { username })
     } else {
         Err("Cognito accepted the new password but returned no tokens.".to_string())
     }
+}
+
+#[tauri::command]
+pub async fn restore_session() -> Result<RestoreOutcome, String> {
+    let refresh_token = match refresh_token_entry()?.get_password() {
+        Ok(token) if !token.is_empty() => token,
+        _ => return Ok(RestoreOutcome::SignedOut),
+    };
+    let response = cognito_client().await
+        .get_tokens_from_refresh_token()
+        .client_id(CLIENT_ID)
+        .refresh_token(refresh_token)
+        .send().await;
+    let Ok(response) = response else {
+        clear_refresh_token();
+        return Ok(RestoreOutcome::SignedOut);
+    };
+    let Some(result) = response.authentication_result() else {
+        clear_refresh_token();
+        return Ok(RestoreOutcome::SignedOut);
+    };
+    retain_restored_session(result)?;
+    Ok(RestoreOutcome::SignedIn)
+}
+
+#[tauri::command]
+pub fn sign_out() -> Result<(), String> {
+    clear_refresh_token();
+    *ID_TOKEN.get_or_init(|| Mutex::new(None)).lock()
+        .map_err(|_| "Sign-in session is unavailable.".to_string())? = None;
+    Ok(())
 }
 
 /// Maps a few common, actionable Cognito errors to plain messages. Anything
@@ -224,5 +303,17 @@ mod tests {
             r#"{"outcome":"SignedIn","username":"creator@example.com"}"#
         );
         assert!(!json.contains("token"));
+    }
+
+    #[test]
+    fn restored_outcomes_never_expose_credential_material() {
+        assert_eq!(
+            serde_json::to_string(&RestoreOutcome::SignedIn).expect("outcome is serializable"),
+            r#"{"outcome":"SignedIn"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&RestoreOutcome::SignedOut).expect("outcome is serializable"),
+            r#"{"outcome":"SignedOut"}"#
+        );
     }
 }
