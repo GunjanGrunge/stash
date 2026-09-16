@@ -45,6 +45,12 @@
   function openFolder(id, nextPath) { parentId = id; path = nextPath; renderBreadcrumb(); loadChildren(); }
   document.querySelectorAll("[data-sort]").forEach((button) => button.addEventListener("click", () => { sortBy = button.dataset.sort; renderRows(); }));
   mountAction?.addEventListener("click", toggleMount);
-  window.STASHBrowser = { show() { screen.hidden = false; renderBreadcrumb(); loadChildren(); loadUsage(); loadMount(); }, openFolder };
+  window.STASHBrowser = { show() { 
+    // The browser is a full-screen authenticated view, not a panel below the
+    // sign-in flow. Hide every pre-auth card before revealing it.
+    document.querySelectorAll(".welcome-card").forEach((card) => { card.hidden = true; });
+    screen.hidden = false;
+    renderBreadcrumb(); loadChildren(); loadUsage(); loadMount();
+  }, openFolder };
   window.addEventListener?.("stash:signed-in", () => window.STASHBrowser.show());
 })();

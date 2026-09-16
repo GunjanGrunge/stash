@@ -19,6 +19,13 @@ test("browser renders explicit hierarchy labels and required states", async () =
   assert.match(source, /couldn't load this folder/);
 });
 
+test("sign-in transition hides the pre-auth cards before showing the browser", async () => {
+  const source = await read("ui/post-signin.js");
+  assert.match(source, /querySelectorAll\("\.welcome-card"\)/);
+  assert.match(source, /card\.hidden\s*=\s*true/);
+  assert.match(source, /screen\.hidden\s*=\s*false/);
+});
+
 test("mount presentation includes the selected drive letter and persistent status", async () => {
   const source = await read("../ui/post-signin.js");
   assert.match(source, /STASH \(\$\{letter\}:/);
