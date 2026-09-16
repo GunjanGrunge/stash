@@ -21,3 +21,4 @@ stash-core = { path = "../../../crates/stash-core" }
 stash-s3-provider = { path = "../../../crates/stash-s3-provider" }
 stash-windows-fs = { path = "../../../crates/stash-windows-fs" }
 winfsp = "0.13.1"
+windows = { version = "0.61", features = ["Win32_System_LibraryLoader"] }

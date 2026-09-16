@@ -4096,6 +4096,7 @@ dependencies = [
  "stash-windows-fs",
  "tauri",
  "tauri-build",
+ "windows",
  "winfsp",
 ]
 

@@ -18,12 +18,43 @@ use stash_windows_fs::{StashFile, StashFileSystemContext};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use winfsp::host::{FileSystemHost, FileSystemParams, FineGuard, VolumeParams};
+use windows::Win32::System::LibraryLoader::LoadLibraryW;
 
 const MOUNT_LETTER: &str = "S:";
 const SEGMENT_SIZE: u64 = 1 << 20; // 1 MiB
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
 
+#[cfg(target_arch = "x86_64")]
+const WINFSP_DLL: &str = "winfsp-x64.dll";
+#[cfg(target_arch = "x86")]
+const WINFSP_DLL: &str = "winfsp-x86.dll";
+#[cfg(target_arch = "aarch64")]
+const WINFSP_DLL: &str = "winfsp-a64.dll";
+
 type LiveHost = FileSystemHost<StashFileSystemContext<HttpRangeProvider<ApiLeaseSource>>, FineGuard>;
+
+/// Loads the installed WinFsp DLL by its absolute installation path before
+/// the delay-loaded binding asks Windows for it by name. Development builds
+/// run from Cargo's target directory, which is not part of the WinFsp DLL
+/// search path.
+fn preload_winfsp() -> Result<(), String> {
+    let roots = ["ProgramFiles(x86)", "ProgramFiles"];
+    for variable in roots {
+        let Some(root) = std::env::var_os(variable) else { continue };
+        let candidate = std::path::PathBuf::from(root)
+            .join("WinFsp")
+            .join("bin")
+            .join(WINFSP_DLL);
+        if !candidate.is_file() {
+            continue;
+        }
+        let path = windows::core::HSTRING::from(candidate.as_os_str());
+        unsafe { LoadLibraryW(&path) }
+            .map_err(|err| format!("STASH couldn't load the Windows drive service: {err}"))?;
+        return Ok(());
+    }
+    Err("STASH needs WinFsp installed to mount a virtual drive.".to_string())
+}
 
 /// Fetches and renews one file's download lease over the authenticated
 /// STASH API. Uses a blocking HTTP client deliberately: WinFSP calls
@@ -114,6 +145,7 @@ impl MountController {
         // WinFsp dynamically loads its native DLL. It must be initialized
         // before a host is created; otherwise a delay-load exception can
         // escape the native boundary and terminate the desktop process.
+        preload_winfsp()?;
         winfsp::winfsp_init()
             .map_err(|err| format!("STASH couldn't initialize the Windows drive service: {err:?}"))?;
 
