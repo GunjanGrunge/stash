@@ -335,6 +335,13 @@ mod tests {
     }
 
     #[test]
+    fn empty_context_is_a_valid_empty_root_directory() {
+        let fs = StashFileSystemContext::<FixedProvider>::new(Vec::new());
+        assert!(matches!(fs.resolve(&path("\\")), Resolved::Root));
+        assert!(fs.entries_after(None).next().is_none());
+    }
+
+    #[test]
     fn resolves_known_file_by_name() {
         let fs = one_file_context();
         assert!(matches!(fs.resolve(&path("\\kick.wav")), Resolved::File(0)));

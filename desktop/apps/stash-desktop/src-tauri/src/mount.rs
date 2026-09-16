@@ -111,24 +111,11 @@ impl MountController {
             return Ok(self.status());
         }
 
+        // An account with no committed files is still a valid STASH: mount
+        // it as an empty, usable root directory. Explorer and creative apps
+        // can then use the same S: drive before the first file arrives.
         let files = crate::api::list_root_files().await?;
-        if files.is_empty() {
-            return Err("Your STASH has no committed files to mount yet.".to_string());
-        }
-
-        let mut entries = Vec::with_capacity(files.len());
-        for file in files {
-            let Some(file_id) = file.file_id else { continue };
-            let provider = HttpRangeProvider::new(ApiLeaseSource { file_id });
-            entries.push(StashFile::new(
-                &file.name,
-                file.size_bytes.unwrap_or(0),
-                SEGMENT_SIZE,
-                READ_TIMEOUT,
-                provider,
-            ));
-        }
-        let context = StashFileSystemContext::new(entries);
+        let context = StashFileSystemContext::new(mount_entries(files));
 
         // WinFSP's host/mount/dispatcher calls are blocking FFI, not async —
         // run them off the Tauri async runtime's own worker threads.
@@ -173,6 +160,27 @@ impl MountController {
         state.letter = None;
         Ok(MountStatus::from(&*state))
     }
+}
+
+/// Translates committed API rows into the read-only entries exposed by the
+/// current mount. An empty committed listing deliberately yields an empty
+/// directory rather than rejecting the mount.
+fn mount_entries(
+    files: Vec<crate::api::ChildItem>,
+) -> Vec<StashFile<HttpRangeProvider<ApiLeaseSource>>> {
+    let mut entries = Vec::with_capacity(files.len());
+    for file in files {
+        let Some(file_id) = file.file_id else { continue };
+        let provider = HttpRangeProvider::new(ApiLeaseSource { file_id });
+        entries.push(StashFile::new(
+            &file.name,
+            file.size_bytes.unwrap_or(0),
+            SEGMENT_SIZE,
+            READ_TIMEOUT,
+            provider,
+        ));
+    }
+    entries
 }
 
 #[tauri::command]
@@ -222,5 +230,12 @@ mod tests {
         assert!(controller.unmount().is_ok());
         assert!(controller.unmount().is_ok());
         assert!(!controller.status().mounted);
+    }
+
+    #[test]
+    fn empty_committed_listing_creates_an_empty_mount_root() {
+        // Regression: an empty STASH is a valid, mountable drive. The live
+        // WinFSP host receives this empty entry table instead of an error.
+        assert!(mount_entries(Vec::new()).is_empty());
     }
 }
