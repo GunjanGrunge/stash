@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>STASH — Welcome / Sign in</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="welcome-shell" aria-labelledby="welcome-heading">
+      <div class="art" aria-hidden="true">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="assets/STASH_splash_dark_2480x1200.png" />
+          <img src="assets/STASH_splash_light_2480x1200.png" alt="" />
+        </picture>
+      </div>
+      <section class="welcome-card">
+        <picture class="wordmark">
+          <source media="(prefers-color-scheme: dark)" srcset="assets/STASH_primary_dark.svg" />
+          <img src="assets/STASH_primary_light.svg" alt="STASH" />
+        </picture>
+        <p class="eyebrow">Welcome</p>
+        <h1 id="welcome-heading">Your creator library, right where you work.</h1>
+        <p class="value">Stash it when you need room. Keep your folder structure intact, find your assets, and use them anywhere.</p>
+        <div class="actions" aria-label="Account actions">
+          <button class="button button-primary" type="button" data-account-action="sign-in">Sign in</button>
+          <button class="button button-secondary" type="button" data-account-action="create-account">Create account</button>
+        </div>
+        <p id="account-status" class="account-status" aria-live="polite">Account connection is coming next. These actions do not sign you in yet.</p>
+      </section>
+    </main>
+    <script src="welcome.js"></script>
+  </body>
+</html>
