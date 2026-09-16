@@ -1,0 +1,392 @@
+[
+  {
+    "path": "README.md",
+    "bytes": 1096,
+    "sha256": "29cdfd4f180caf69221a5dbf9fbfb283f1891b4a00db14e43fb191c424dc7c93"
+  },
+  {
+    "path": "brand/demo_thumbnails/02_music_samples_1200x675.jpg",
+    "bytes": 23054,
+    "sha256": "2a09895d263443f781512c76c2b3fbda984ec7e74e5fd9bd89416404d19beccc"
+  },
+  {
+    "path": "brand/demo_thumbnails/07_documents_notes_1200x675.jpg",
+    "bytes": 23037,
+    "sha256": "81bebab5deedfa216f9dbce100608afedacb251e9040572fdbea35a0714c745b"
+  },
+  {
+    "path": "brand/demo_thumbnails/09_projects_premiere_1200x675.webp",
+    "bytes": 20066,
+    "sha256": "c5212da7cd0e64393305cdaa231d8c56dd7adb0fd3aad3940834b4af71203037"
+  },
+  {
+    "path": "brand/demo_thumbnails/01_music_waveforms_1200x675.jpg",
+    "bytes": 69443,
+    "sha256": "6b293544fb61f43bc394d3ddc88c35d6adb901b04ecd253ac0e0b4d6cc6c46d9"
+  },
+  {
+    "path": "brand/demo_thumbnails/09_projects_premiere_1200x675.jpg",
+    "bytes": 67362,
+    "sha256": "9a27c26eabb6c9840fd1c13920e8641d44af07392591fd8518f291994a830ba9"
+  },
+  {
+    "path": "brand/demo_thumbnails/05_images_moodboard_1200x675.jpg",
+    "bytes": 32115,
+    "sha256": "4d08a959bded4e06c7e4c3e4a532c9379b3f1ecd260cbce7db70c225ed7c01f3"
+  },
+  {
+    "path": "brand/demo_thumbnails/03_video_edit_1200x675.webp",
+    "bytes": 18852,
+    "sha256": "3281d9cd9d987e9e90f7b1d74f06d9c95fa9acfe9532112c88bd1d05d97e9928"
+  },
+  {
+    "path": "brand/demo_thumbnails/02_music_samples_1200x675.webp",
+    "bytes": 6976,
+    "sha256": "312ab5780bc9348b923e186822db53f26a51a38c55f905fffc838f9dc176fa9a"
+  },
+  {
+    "path": "brand/demo_thumbnails/04_video_broll_1200x675.webp",
+    "bytes": 19498,
+    "sha256": "566892644ff80b5affb23d05a9c7dbaf645bd3f32b5d6d227d36d42d207d5f11"
+  },
+  {
+    "path": "brand/demo_thumbnails/04_video_broll_1200x675.jpg",
+    "bytes": 67489,
+    "sha256": "618ee0675b7e6d10825d8efc4d1b8c055f58a8bccedc3b17f418c1a482f2518d"
+  },
+  {
+    "path": "brand/demo_thumbnails/03_video_edit_1200x675.jpg",
+    "bytes": 66762,
+    "sha256": "187f95a9e1a5d341419cd1bb0b5a6ec123ebd9ce5173edf4de454aa6f009b31b"
+  },
+  {
+    "path": "brand/demo_thumbnails/10_projects_audio_1200x675.jpg",
+    "bytes": 71405,
+    "sha256": "457af311d662328863ee6191363e0139bd3e3a9d3aa42553fcd4fe9d52a07156"
+  },
+  {
+    "path": "brand/demo_thumbnails/01_music_waveforms_1200x675.webp",
+    "bytes": 15914,
+    "sha256": "d4cf53d92596859e6553cb1c9e80535c395e4fde2b47e432724fe4dbdfad8666"
+  },
+  {
+    "path": "brand/demo_thumbnails/05_images_moodboard_1200x675.webp",
+    "bytes": 9224,
+    "sha256": "f0263553acb2cf94a0f4e85c6e0b1ea88243dc4ef424ef87a32957d40124721a"
+  },
+  {
+    "path": "brand/demo_thumbnails/07_documents_notes_1200x675.webp",
+    "bytes": 6862,
+    "sha256": "3e495b31e69b1345bbbaafb7c0259b88d8dc584be44b5d9d95bc3318e4de340d"
+  },
+  {
+    "path": "brand/demo_thumbnails/10_projects_audio_1200x675.webp",
+    "bytes": 16304,
+    "sha256": "6c6aa840aae91b2f3db2080fec461ca85629633d429400d0d93be52ed6811148"
+  },
+  {
+    "path": "brand/demo_thumbnails/06_images_brand_1200x675.webp",
+    "bytes": 8928,
+    "sha256": "587ba5b692edacf1b14fac58ae1ffbd742ac635bfc8077b8b05e450b8170c7c9"
+  },
+  {
+    "path": "brand/demo_thumbnails/08_documents_brief_1200x675.webp",
+    "bytes": 6780,
+    "sha256": "7e0b0746565413bf038c73cf802bfda405feece45baf4cad601cb7ebdc1ff0bb"
+  },
+  {
+    "path": "brand/demo_thumbnails/06_images_brand_1200x675.jpg",
+    "bytes": 32132,
+    "sha256": "b39687e5a1bd6754fabc19308c99a6b818677702a15779d91cf8c066e0f6d865"
+  },
+  {
+    "path": "brand/demo_thumbnails/08_documents_brief_1200x675.jpg",
+    "bytes": 23074,
+    "sha256": "f4381fd1c208c9902cac15c4a85c19a0a1fd22ce403b71f5b7b0bb5d187d7cc2"
+  },
+  {
+    "path": "brand/social/STASH_social_1200x630.jpg",
+    "bytes": 64379,
+    "sha256": "9c716ccaafef95b77d960450c50011a41cadfd869f5d00418a357755b58bcdc5"
+  },
+  {
+    "path": "brand/social/STASH_social_1200x630.png",
+    "bytes": 110601,
+    "sha256": "2df2ab3272383b9af0282eb893389facb4ed2c878e89b43507f0870ef1563ca7"
+  },
+  {
+    "path": "brand/fonts/FONT-SPEC.md",
+    "bytes": 860,
+    "sha256": "708ae052db821741644e02c8cc8e1c81aa3d2e9cc0ebc7dbe7e9f97acc4a38ee"
+  },
+  {
+    "path": "brand/logos/symbol/STASH_symbol_dark.svg",
+    "bytes": 423,
+    "sha256": "499a470932df03f36bca498192c8b5bfeb363d3b365eeda23b0a7622617808c9"
+  },
+  {
+    "path": "brand/logos/symbol/STASH_symbol_white.png",
+    "bytes": 6078,
+    "sha256": "4962d7a1bd3cf94f7a5ff998e9857c6c1dad3052918037fac7986b9b77ddc6a1"
+  },
+  {
+    "path": "brand/logos/symbol/STASH_symbol_black.png",
+    "bytes": 6074,
+    "sha256": "71147188e75416815d3cd4f95d01f95b4d092a081d9035948735651ba7215077"
+  },
+  {
+    "path": "brand/logos/symbol/STASH_symbol_white.svg",
+    "bytes": 260,
+    "sha256": "e939369e44ce17710c6126856098b31f6bda4620be0cb683d03d54fcc9f11012"
+  },
+  {
+    "path": "brand/logos/symbol/STASH_symbol_gradient.png",
+    "bytes": 6795,
+    "sha256": "0fb4600565df07188d8a5c8a6945cf8bbe65dc20ee69de0da9c084d3ecb083ba"
+  },
+  {
+    "path": "brand/logos/symbol/STASH_symbol_light.png",
+    "bytes": 6795,
+    "sha256": "0fb4600565df07188d8a5c8a6945cf8bbe65dc20ee69de0da9c084d3ecb083ba"
+  },
+  {
+    "path": "brand/logos/symbol/STASH_symbol_black.svg",
+    "bytes": 260,
+    "sha256": "44bb09d07c8320278566ea61b584b226e02c5225f67f5291dcd23340c7e252b3"
+  },
+  {
+    "path": "brand/logos/symbol/STASH_symbol_light.svg",
+    "bytes": 423,
+    "sha256": "499a470932df03f36bca498192c8b5bfeb363d3b365eeda23b0a7622617808c9"
+  },
+  {
+    "path": "brand/logos/symbol/STASH_symbol_dark.png",
+    "bytes": 6795,
+    "sha256": "0fb4600565df07188d8a5c8a6945cf8bbe65dc20ee69de0da9c084d3ecb083ba"
+  },
+  {
+    "path": "brand/logos/symbol/STASH_symbol_gradient.svg",
+    "bytes": 423,
+    "sha256": "499a470932df03f36bca498192c8b5bfeb363d3b365eeda23b0a7622617808c9"
+  },
+  {
+    "path": "brand/logos/monochrome/STASH_logo_black.png",
+    "bytes": 5280,
+    "sha256": "9b9a19e65e0fb0d61c6a45b3fc8bb9eb5bbf673aebd0e8024ffb187bfd04f90a"
+  },
+  {
+    "path": "brand/logos/monochrome/STASH_logo_white.png",
+    "bytes": 5714,
+    "sha256": "7402eb6d81eabd55cc9dd9d09dd47c7e16f2c9871c7c583fbc28d2880b3dbf7d"
+  },
+  {
+    "path": "brand/logos/monochrome/STASH_logo_black.svg",
+    "bytes": 478,
+    "sha256": "aef854f0a7c21c16783b6b952c750f13c956cf00ddadbc8f6c1e9e546575f791"
+  },
+  {
+    "path": "brand/logos/monochrome/STASH_logo_white.svg",
+    "bytes": 478,
+    "sha256": "14275f185a26427f7ad7d6a4db8e37d16fdeb47e74191a32dd8d984373dd105a"
+  },
+  {
+    "path": "brand/logos/primary/STASH_primary_dark_1x.png",
+    "bytes": 6210,
+    "sha256": "2074e37828d904acb7ced9e84937d8ce736472b9036c3de8e26930234789ddb4"
+  },
+  {
+    "path": "brand/logos/primary/STASH_primary_light_1x.png",
+    "bytes": 6364,
+    "sha256": "24298b1e6567add1ec13c4ea7a3eb2ff09fed0f05f4517242b1712d7552c08af"
+  },
+  {
+    "path": "brand/logos/primary/STASH_primary_light_2x.png",
+    "bytes": 15732,
+    "sha256": "047fa02e8c958ba39814ccf8765c5324dc41d6eea05386863beb08656fac6308"
+  },
+  {
+    "path": "brand/logos/primary/STASH_primary_dark.svg",
+    "bytes": 641,
+    "sha256": "942814f63bb9c98f33e17b8006e06b24a07cd042796159cb2fce6d5d1668be89"
+  },
+  {
+    "path": "brand/logos/primary/STASH_primary_light.svg",
+    "bytes": 641,
+    "sha256": "3188d952cbfccc97e93d9364e221837d6a50d14039bca2c44eec4488a547b893"
+  },
+  {
+    "path": "brand/logos/primary/STASH_primary_dark_2x.png",
+    "bytes": 15380,
+    "sha256": "d9ae073b0599480b3af55e03b337de53a0371b0772a24051125a156327d17deb"
+  },
+  {
+    "path": "brand/logos/wordmarks/STASH_wordmark_dark.svg",
+    "bytes": 227,
+    "sha256": "995c936c74094ec6951a0f81279f87b3600288164184623b35beed2c1e93e9c6"
+  },
+  {
+    "path": "brand/logos/wordmarks/STASH_wordmark_light.svg",
+    "bytes": 230,
+    "sha256": "718a99ad333a5e0d942451042acc89af6543ca8d2b3ed1ddc55790f3a4bc44f9"
+  },
+  {
+    "path": "brand/logos/wordmarks/STASH_wordmark_light.png",
+    "bytes": 5549,
+    "sha256": "887cd13d17b39da3ddde01db5467d8dee22dbfd921a093b952bdfb40fbea486f"
+  },
+  {
+    "path": "brand/logos/wordmarks/STASH_wordmark_dark.png",
+    "bytes": 5375,
+    "sha256": "242d943cc38069bccdec3377f7b614327bc596d20702277608b32fb5e0a422f4"
+  },
+  {
+    "path": "brand/hero/STASH_home_hero_1600x900.webp",
+    "bytes": 27222,
+    "sha256": "9bcf899a5810ff715ce272508e411f90505f1b6aef287a46ca03e5604397d7d4"
+  },
+  {
+    "path": "brand/hero/STASH_home_hero_1600x900.png",
+    "bytes": 94434,
+    "sha256": "730411a03ffe7dadc1ae43ac41b20a2a8ac2d3ba4e65936f59a3149333de015a"
+  },
+  {
+    "path": "brand/icons/web/favicon.svg",
+    "bytes": 423,
+    "sha256": "499a470932df03f36bca498192c8b5bfeb363d3b365eeda23b0a7622617808c9"
+  },
+  {
+    "path": "brand/icons/web/favicon_16.png",
+    "bytes": 133,
+    "sha256": "63b58992b35608c736f1de7e205c1f3171cf96f949e2262aee3a12c14651e489"
+  },
+  {
+    "path": "brand/icons/web/favicon_32.png",
+    "bytes": 199,
+    "sha256": "a6a211a3a9b0c9ad460a712ad9eb937992d47075ef230b55c51700e28732bf04"
+  },
+  {
+    "path": "brand/icons/web/favicon_48.png",
+    "bytes": 331,
+    "sha256": "9765666ebdb8b9cc008bdf6d51179f399bcc3f4ddefe04ed2ceae564a62f57f4"
+  },
+  {
+    "path": "brand/icons/windows/STASH_32.png",
+    "bytes": 1534,
+    "sha256": "223fc3b791a70c8ac6f17996df426e85efafe8f044550cf8833b8ef037630ea6"
+  },
+  {
+    "path": "brand/icons/windows/STASH_16.png",
+    "bytes": 706,
+    "sha256": "7e631479e5677298c55a4f1beef6db26af70430c2eccfbfb1f1547ee39bd377d"
+  },
+  {
+    "path": "brand/icons/windows/STASH_48.png",
+    "bytes": 2499,
+    "sha256": "e9eb23c521143013a2272443d3b163887bd81985aeed5da8691ddc05ad0d9a50"
+  },
+  {
+    "path": "brand/icons/windows/STASH.ico",
+    "bytes": 25369,
+    "sha256": "ff76f954de1cfc1ce4df6267bce4f80e9a3cb77eff248a886d0b581033eb5530"
+  },
+  {
+    "path": "brand/icons/windows/STASH_256.png",
+    "bytes": 10239,
+    "sha256": "df175df90a0d96a353b8ab8e51e74c02a00d464be708430f50f58576f6eb54cd"
+  },
+  {
+    "path": "brand/icons/windows/STASH_128.png",
+    "bytes": 5613,
+    "sha256": "a1e0f6b5b8630bd421dcbdaeb1f57e1f074e41dfcfde95f620aab1577d14656a"
+  },
+  {
+    "path": "brand/icons/windows/STASH_24.png",
+    "bytes": 1095,
+    "sha256": "bda111acab90341203b598569bfb634364baab6c83b78422a2b85114537b07b1"
+  },
+  {
+    "path": "brand/icons/windows/STASH_64.png",
+    "bytes": 3025,
+    "sha256": "4c4ca0f2cbc4fb7c3dba58e5e81f26fbd25c1213e9beb64ddbe5ee9eb7ffc08c"
+  },
+  {
+    "path": "brand/icons/windows/STASH_appicon_master_1024.png",
+    "bytes": 8561,
+    "sha256": "090169995b5d7a777a0174d46f1b1d6889ea25c9a643802c7abd2d4372f20f48"
+  },
+  {
+    "path": "brand/icons/pwa/STASH_pwa_maskable_512.png",
+    "bytes": 3626,
+    "sha256": "eb61f0f55426555e986f4444eb2c5b0274fcb94baa689ee3104936b1721d6094"
+  },
+  {
+    "path": "brand/icons/pwa/STASH_pwa_512.png",
+    "bytes": 3481,
+    "sha256": "e99b36cff67020b701abe1ab0266cef5d46382c456f2a9bf6fcdd220c7597b7b"
+  },
+  {
+    "path": "brand/icons/pwa/STASH_pwa_192.png",
+    "bytes": 1244,
+    "sha256": "97f0389745c542cc67238b26686785793e47d3363bf36da560980bd1a0f4fe20"
+  },
+  {
+    "path": "brand/icons/apple/apple-touch-icon_180.png",
+    "bytes": 1235,
+    "sha256": "91245080ba27e3cd9d3c6e3bffe8ae8428c9592d2276f3f2bd1d7c9f556e52a3"
+  },
+  {
+    "path": "brand/icons/installer/STASH_installer_512.png",
+    "bytes": 3481,
+    "sha256": "e99b36cff67020b701abe1ab0266cef5d46382c456f2a9bf6fcdd220c7597b7b"
+  },
+  {
+    "path": "brand/icons/installer/STASH_installer_1024.png",
+    "bytes": 8561,
+    "sha256": "090169995b5d7a777a0174d46f1b1d6889ea25c9a643802c7abd2d4372f20f48"
+  },
+  {
+    "path": "brand/empty_states/offline_640x480.png",
+    "bytes": 44585,
+    "sha256": "b6ab3396f93944b8904e0ab7798fac63f6664f4b4af2a9f22d680b318c5bebaa"
+  },
+  {
+    "path": "brand/empty_states/no_recent_640x480.png",
+    "bytes": 58839,
+    "sha256": "faf0e8230fc927b2da0b4d690d2dca24f236a8a9795e88b14ce9491d9c77ad0d"
+  },
+  {
+    "path": "brand/empty_states/trash_empty_640x480.png",
+    "bytes": 60630,
+    "sha256": "26c6d22547ed666ecd0125473f63027a5e807ae1547135b180538d06f0795f8a"
+  },
+  {
+    "path": "brand/empty_states/empty_library_640x480.png",
+    "bytes": 57863,
+    "sha256": "c0f3b2b10ea6472efd0cc6c91ac92bbea830f3cdb57e4af3018c89e7703025f5"
+  },
+  {
+    "path": "brand/empty_states/no_search_640x480.png",
+    "bytes": 55883,
+    "sha256": "830717dba0f5e076641ad5ea274bb2d209a2ad5ec10f7ab71d5701806804fd5d"
+  },
+  {
+    "path": "brand/splash/STASH_splash_dark_2480x1200.png",
+    "bytes": 194264,
+    "sha256": "564fdacf9e7aa275b7ea8a3fa5af173d2f2544f550d2ff046526cca9948cd4ff"
+  },
+  {
+    "path": "brand/splash/STASH_splash_light_2480x1200.png",
+    "bytes": 246223,
+    "sha256": "4465ab5d56aa53460b21fb49dff67a2dd3a1c2b814e54b2622f4610d18c602ab"
+  },
+  {
+    "path": "brand/splash/STASH_splash_dark_2480x1200.webp",
+    "bytes": 30550,
+    "sha256": "d1fd2b58343736b1cba09dab8138108d583f80fbe6ea1ed28e4ab134a7a8a75e"
+  },
+  {
+    "path": "brand/splash/STASH_splash_light_2480x1200.webp",
+    "bytes": 32466,
+    "sha256": "795e69efb9872091e048242db8b3ec190afe573bc8dd1410edb5504d58364321"
+  }
+]
