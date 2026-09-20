@@ -52,7 +52,7 @@ export class StashRetentionStack extends cdk.Stack {
     });
     this.role.addToPolicy(new iam.PolicyStatement({
       actions: ["dynamodb:Query", "dynamodb:UpdateItem", "dynamodb:TransactWriteItems"],
-      resources: [table.tableArn, `${table.tableArn}/index/gsi5`],
+      resources: [table.tableArn, `${table.tableArn}/index/gsi1`, `${table.tableArn}/index/gsi5`],
     }));
     this.role.addToPolicy(new iam.PolicyStatement({
       actions: ["s3:DeleteObject"],

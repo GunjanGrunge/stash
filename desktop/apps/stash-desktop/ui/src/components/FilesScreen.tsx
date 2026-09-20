@@ -23,6 +23,11 @@ export function FilesScreen({ gateway, onUsage, onMount }: { gateway: DesktopGat
   const [selected, setSelected] = useState<ChildItem | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({ key: "name", direction: "ascending" });
   const [isPlaying, setIsPlaying] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [folderError, setFolderError] = useState("");
+  const [confirmTrashFolder, setConfirmTrashFolder] = useState(false);
+  const [trashingFolder, setTrashingFolder] = useState(false);
 
   const loadChildren = () => {
     setFilesState({ status: "loading" });
@@ -48,11 +53,42 @@ export function FilesScreen({ gateway, onUsage, onMount }: { gateway: DesktopGat
   }), [items, sort]);
 
   const toggleSort = (key: SortKey) => setSort((current) => current.key === key ? { key, direction: current.direction === "ascending" ? "descending" : "ascending" } : { key, direction: "ascending" });
+  const createFolder = async () => {
+    const name = newFolderName.trim();
+    if (!name) return;
+    setCreatingFolder(true);
+    setFolderError("");
+    try {
+      await gateway.library.createFolder(name, folderId);
+      setNewFolderName("");
+      loadChildren();
+    } catch (error) {
+      setFolderError(safeActionError(error, "STASH couldn't create that folder."));
+    } finally {
+      setCreatingFolder(false);
+    }
+  };
   const openFolder = (item: ChildItem) => {
     const id = item.folderId;
     if (kindOf(item) !== "Folder" || !id) return;
     setFolderId(id);
+    setConfirmTrashFolder(false);
     setPath((current) => [...current, { id, name: item.name }]);
+  };
+  const trashSelectedFolder = async () => {
+    if (!selected?.folderId || selected.entity !== "FOLDER") return;
+    setTrashingFolder(true);
+    setFolderError("");
+    try {
+      await gateway.library.trashFolder(selected.folderId);
+      setSelected(null);
+      setConfirmTrashFolder(false);
+      loadChildren();
+    } catch (error) {
+      setFolderError(safeActionError(error, "STASH couldn't move that folder to Trash."));
+    } finally {
+      setTrashingFolder(false);
+    }
   };
   const goTo = (location: FolderLocation | null, index: number) => {
     setFolderId(location?.id ?? "ROOT");
@@ -76,9 +112,14 @@ export function FilesScreen({ gateway, onUsage, onMount }: { gateway: DesktopGat
         </div>
 
         <div className="workspace-actions">
+          <label className="visually-hidden" htmlFor="new-folder-name">New folder name</label>
+          <input id="new-folder-name" value={newFolderName} maxLength={255} onChange={(event) => setNewFolderName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createFolder(); }} placeholder="New folder" className="new-folder-input" />
+          <button className="button button-secondary" type="button" disabled={creatingFolder || !newFolderName.trim()} onClick={() => void createFolder()}>{creatingFolder ? "Creating…" : "New folder"}</button>
           <input type="search" placeholder="Search your STASH... ⌘K" className="search-input" />
         </div>
       </header>
+
+      {folderError && <div className="status-banner banner-warning" role="alert">{folderError}</div>}
 
       {filesState.status === "stale" && (
         <div className="status-banner banner-warning">Data may be stale</div>
@@ -109,6 +150,7 @@ export function FilesScreen({ gateway, onUsage, onMount }: { gateway: DesktopGat
                     key={`${item.entity}-${item.name}-${item.fileId || item.folderId}`}
                     className={selected === item ? "is-selected" : ""}
                     onClick={() => {
+                      setConfirmTrashFolder(false);
                       setSelected(item);
                       if (kindOf(item) === "Folder") openFolder(item);
                     }}
@@ -162,6 +204,17 @@ export function FilesScreen({ gateway, onUsage, onMount }: { gateway: DesktopGat
                   <div className="meta-row"><span className="meta-label">Path:</span> <span>{selected.originalRelativePath}</span></div>
                 )}
               </div>
+              {selected.entity === "FOLDER" && (
+                <div className="drawer-actions">
+                  {confirmTrashFolder ? (
+                    <>
+                      <p className="drawer-warning">Move this folder and everything inside it to Trash? It can be restored for 30 days.</p>
+                      <button type="button" className="button button-danger" disabled={trashingFolder} onClick={() => void trashSelectedFolder()}>{trashingFolder ? "Movingâ€¦" : "Move to Trash"}</button>
+                      <button type="button" className="button button-secondary" disabled={trashingFolder} onClick={() => setConfirmTrashFolder(false)}>Cancel</button>
+                    </>
+                  ) : <button type="button" className="button button-secondary" onClick={() => setConfirmTrashFolder(true)}>Delete folderâ€¦</button>}
+                </div>
+              )}
             </>
           ) : (
             <div className="drawer-placeholder">
@@ -173,4 +226,3 @@ export function FilesScreen({ gateway, onUsage, onMount }: { gateway: DesktopGat
     </section>
   );
 }
-

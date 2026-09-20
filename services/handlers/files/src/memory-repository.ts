@@ -123,6 +123,42 @@ export class MemoryRepository implements Repository {
     return file;
   }
 
+  async trashFolder(userId: string, folderId: string, deletedAt: string, purgeAfter: string): Promise<FolderRecord | undefined> {
+    const folder = await this.findFolderById(userId, folderId);
+    if (folder === undefined) return undefined;
+    if (folder.state === "trashed") return folder;
+    if (folder.state === "purging") return undefined;
+    folder.state = "trashed";
+    folder.deletedAt = deletedAt;
+    folder.purgeAfter = purgeAfter;
+    delete folder.gsi1pk;
+    delete folder.gsi1sk;
+    folder.gsi4pk = `USER#${userId}#TRASH`;
+    folder.gsi4sk = `PURGE#${purgeAfter}#FOLDER#${folder.folderId}`;
+    folder.gsi5pk = "PURGE";
+    folder.gsi5sk = `AT#${purgeAfter}#USER#${userId}#FOLDER#${folder.folderId}`;
+    return folder;
+  }
+
+  async restoreFolder(userId: string, folderId: string): Promise<FolderRecord | undefined> {
+    const folder = await this.findFolderById(userId, folderId);
+    if (folder === undefined || folder.state !== "trashed") return undefined;
+    folder.state = "active";
+    delete folder.deletedAt;
+    delete folder.purgeAfter;
+    delete folder.gsi4pk;
+    delete folder.gsi4sk;
+    delete folder.gsi5pk;
+    delete folder.gsi5sk;
+    folder.gsi1pk = `${folder.pk}#PARENT#${folder.parentFolderId ?? "ROOT"}`;
+    folder.gsi1sk = folder.name;
+    return folder;
+  }
+
+  async listTrashedFolders(userId: string): Promise<FolderRecord[]> {
+    return this.items.filter((item): item is FolderRecord => item.entity === "FOLDER" && item.pk === `USER#${userId}` && item.state === "trashed");
+  }
+
   async getIdempotentResult(
     userId: string,
     stashId: string,

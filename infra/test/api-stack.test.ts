@@ -21,6 +21,9 @@ const USER_POOL_CLIENT_ID = "testdesktopclientid";
  * names §3.4's prose uses.
  */
 const EXPECTED_ROUTE_KEYS = [
+  "POST /folders",
+  "DELETE /folders/{id}",
+  "POST /folders/{id}/restore",
   "POST /files/{id}/download-url",
   "DELETE /files/{id}",
   "GET /trash",
@@ -97,7 +100,7 @@ describe("StashApiStack route table", () => {
   });
 
   it("creates exactly 18 routes, so an accidental extra route cannot hide", () => {
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 18);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 21);
   });
 
   for (const key of EXPECTED_ROUTE_KEYS) {
@@ -111,7 +114,7 @@ describe("StashApiStack route table", () => {
   it("gives every route its OWN integration — no route shares a handler", () => {
     const targets = routes().map((r) => JSON.stringify(r.Target));
     expect(new Set(targets).size).toBe(EXPECTED_ROUTE_KEYS.length);
-    template.resourceCountIs("AWS::ApiGatewayV2::Integration", 18);
+    template.resourceCountIs("AWS::ApiGatewayV2::Integration", 21);
   });
 });
 
@@ -158,7 +161,7 @@ describe("StashApiStack authorization", () => {
 
 describe("StashApiStack handlers", () => {
   it("creates exactly one Lambda per route", () => {
-    template.resourceCountIs("AWS::Lambda::Function", 18);
+    template.resourceCountIs("AWS::Lambda::Function", 21);
   });
 
   it("names every function under the stash- prefix the role's log grant covers", () => {

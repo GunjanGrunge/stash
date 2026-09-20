@@ -6,7 +6,7 @@
 
 use reqwest::{Client, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 const DEFAULT_API_URL: &str = "https://8ojdkvlefl.execute-api.ap-south-1.amazonaws.com";
 
@@ -115,6 +115,18 @@ impl UploadApi {
     ) -> Result<Value, String> {
         self.post(path, body, idempotency).await
     }
+
+    pub(crate) async fn delete_value(&self, path: &str) -> Result<Value, String> {
+        let token = crate::auth::id_token()?;
+        let response = self
+            .client
+            .delete(format!("{}{path}", api_url()))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|_| "STASH could not be reached. Check your connection and try again.".to_string())?;
+        decode_json(response).await
+    }
 }
 
 async fn decode_json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, String> {
@@ -146,6 +158,34 @@ pub async fn list_children(folder_id: String) -> Result<Value, String> {
 #[tauri::command]
 pub async fn get_usage() -> Result<Value, String> {
     get_json("/me/usage").await
+}
+
+#[tauri::command]
+pub async fn create_folder(name: String, parent_folder_id: String) -> Result<Value, String> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 255 || name.contains(['/', '\\']) || name == "." || name == ".." {
+        return Err("That folder name cannot be used in STASH.".to_string());
+    }
+    let parent = parent_folder_id.trim();
+    UploadApi::new()
+        .post_value(
+            "/folders",
+            &json!({
+                "name": name,
+                "parentFolderId": if parent.is_empty() || parent == "ROOT" { Value::Null } else { Value::String(parent.to_string()) },
+            }),
+            None,
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn trash_folder(folder_id: String) -> Result<Value, String> {
+    let id = folder_id.trim();
+    if id.is_empty() || id.len() > 128 || id.chars().any(|c| !c.is_ascii_alphanumeric() && !matches!(c, '-' | '_')) {
+        return Err("That folder could not be moved to Trash.".to_string());
+    }
+    UploadApi::new().delete_value(&format!("/folders/{id}")).await
 }
 
 /// One mountable root-level file: only committed files are mounted, since

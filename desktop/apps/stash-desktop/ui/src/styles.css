@@ -385,6 +385,15 @@ html, body, #root {
   border-color: var(--stash-cyan);
 }
 
+.new-folder-input {
+  min-width: 9.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  background: var(--surface-card);
+  color: var(--text-primary);
+  padding: 0.58rem 0.72rem;
+}
+
 /* --- Hero Banner --- */
 .stash-hero-card {
   position: relative;
@@ -860,6 +869,18 @@ html, body, #root {
 .button-secondary:hover {
   background: var(--surface-hover);
 }
+.button-danger {
+  background: #8f2937;
+  color: #ffffff;
+}
+.button-danger:hover { background: #ad3444; }
+.drawer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+.drawer-warning { width: 100%; color: #f1bd86; margin: 0; font-size: 0.85rem; }
 .button-sm {
   padding: 0.35rem 0.75rem;
   font-size: 0.8rem;

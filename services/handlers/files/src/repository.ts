@@ -55,6 +55,13 @@ export interface Repository {
   /** Atomically restores a caller-owned recoverable Trash record. */
   restoreFile(userId: string, fileId: string): Promise<FileRecord | undefined>;
 
+  /** Atomically hides one folder root while preserving its descendant tree. */
+  trashFolder(userId: string, folderId: string, deletedAt: string, purgeAfter: string): Promise<FolderRecord | undefined>;
+  /** Restores one recoverable folder root at its exact original parent/name. */
+  restoreFolder(userId: string, folderId: string): Promise<FolderRecord | undefined>;
+  /** Lists recoverable folder roots for the caller's Trash view. */
+  listTrashedFolders(userId: string): Promise<FolderRecord[]>;
+
   /** Replay support: the stored outcome of a previous (user, stash, key) call. */
   getIdempotentResult(
     userId: string,

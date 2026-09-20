@@ -182,6 +182,8 @@ pub fn run() {
             auth::sign_out,
             api::list_children,
             api::get_usage,
+            api::create_folder,
+            api::trash_folder,
             mount::mount_status,
             mount::mount_stash,
             mount::unmount_stash,

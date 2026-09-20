@@ -4,7 +4,7 @@ import type { DesktopGateway, WindowAction } from "../contracts";
 type Invoke = <T>(command: AllowedCommand, args?: Record<string, unknown>) => Promise<T>;
 type TauriWindow = { minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void>; startDragging(): Promise<void> };
 type TauriGlobals = { core?: { invoke?: Invoke }; window?: { getCurrentWindow?: () => TauriWindow }; event?: { listen?: <T>(name: string, handler: (event: { payload: T }) => void) => Promise<() => void> } };
-type AllowedCommand = "sign_in" | "complete_new_password" | "restore_session" | "sign_out" | "list_children" | "get_usage" | "mount_status" | "mount_stash" | "unmount_stash" | "select_stash_source" | "confirm_stash" | "get_transfer_status" | "cancel_stash";
+type AllowedCommand = "sign_in" | "complete_new_password" | "restore_session" | "sign_out" | "list_children" | "get_usage" | "create_folder" | "trash_folder" | "mount_status" | "mount_stash" | "unmount_stash" | "select_stash_source" | "confirm_stash" | "get_transfer_status" | "cancel_stash";
 type RecordValue = Record<string, unknown>;
 
 const getTauri = (): TauriGlobals | undefined => (globalThis as typeof globalThis & { __TAURI__?: TauriGlobals }).__TAURI__;
@@ -69,6 +69,7 @@ function sanitizeChild(value: unknown): ChildItem | undefined {
   return item;
 }
 function childList(value: unknown): { items: ChildItem[] } { if (!isRecord(value) || !Array.isArray(value.items)) throw new Error("STASH returned an invalid file list."); return { items: value.items.map(sanitizeChild).filter((item): item is ChildItem => item !== undefined) }; }
+function childItem(value: unknown): ChildItem { const item = sanitizeChild(value); if (item === undefined) throw new Error("STASH returned an invalid folder."); return item; }
 function usage(value: unknown): Usage {
   if (!isRecord(value)) throw new Error("STASH returned an invalid storage response.");
   const result: Usage = {};
@@ -147,7 +148,7 @@ export function createTauriGateway(): DesktopGateway {
     kind: "tauri",
     window: { act: (action) => windowActions[action](), startDragging: () => appWindow.startDragging() },
     auth: { signIn, completeNewPassword, clearPendingChallenge, restoreSession: async () => { clearPendingChallenge(); try { return await call("restore_session", undefined, restoreOutcome); } catch (error) { clearPendingChallenge(); throw error; } }, signOut: async () => { clearPendingChallenge(); await call("sign_out", undefined, () => undefined); } },
-    library: { listChildren: (folderId) => call("list_children", { folderId: validFolderId(folderId) }, childList), getUsage: () => call("get_usage", undefined, usage), mountStatus: () => call("mount_status", undefined, mountStatus), mountStash: () => call("mount_stash", undefined, mountStatus), unmountStash: () => call("unmount_stash", undefined, mountStatus) },
+    library: { listChildren: (folderId) => call("list_children", { folderId: validFolderId(folderId) }, childList), createFolder: (name, parentFolderId) => call("create_folder", { name, parentFolderId: validFolderId(parentFolderId) }, childItem), trashFolder: async (folderId) => { await call("trash_folder", { folderId: validFolderId(folderId) }, () => undefined); }, getUsage: () => call("get_usage", undefined, usage), mountStatus: () => call("mount_status", undefined, mountStatus), mountStash: () => call("mount_stash", undefined, mountStatus), unmountStash: () => call("unmount_stash", undefined, mountStatus) },
     stash: {
       selectSource: (kind) => call("select_stash_source", { kind }, sourceSummary),
       confirm: () => call("confirm_stash", undefined, transferStatus),
@@ -164,6 +165,6 @@ export function createTauriGateway(): DesktopGateway {
 
 export function createUnavailableGateway(): DesktopGateway {
   const unavailable = async () => { throw new Error("Desktop connection is unavailable in this build."); };
-  return { kind: "unavailable", window: { act: unavailable, startDragging: unavailable }, auth: { signIn: unavailable, completeNewPassword: unavailable, clearPendingChallenge: () => undefined, restoreSession: async () => ({ outcome: "SignedOut" }), signOut: unavailable }, library: { listChildren: unavailable, getUsage: unavailable, mountStatus: unavailable, mountStash: unavailable, unmountStash: unavailable }, stash: { selectSource: unavailable, confirm: unavailable, status: unavailable, cancel: unavailable, onNativeDrop: async () => () => undefined }, unavailable: (capability) => `${capabilityLabel(capability)} is available in the desktop app when its backend capability is implemented.` } as DesktopGateway;
+  return { kind: "unavailable", window: { act: unavailable, startDragging: unavailable }, auth: { signIn: unavailable, completeNewPassword: unavailable, clearPendingChallenge: () => undefined, restoreSession: async () => ({ outcome: "SignedOut" }), signOut: unavailable }, library: { listChildren: unavailable, createFolder: unavailable, trashFolder: unavailable, getUsage: unavailable, mountStatus: unavailable, mountStash: unavailable, unmountStash: unavailable }, stash: { selectSource: unavailable, confirm: unavailable, status: unavailable, cancel: unavailable, onNativeDrop: async () => () => undefined }, unavailable: (capability) => `${capabilityLabel(capability)} is available in the desktop app when its backend capability is implemented.` } as DesktopGateway;
 }
 function capabilityLabel(capability: Parameters<DesktopGateway["unavailable"]>[0]): string { return { home: "Home summaries", search: "Search", "stash-it": "Stash It", "recent-stashes": "Recent Stashes", offline: "Offline files", transfers: "Transfers", settings: "Settings" }[capability]; }

@@ -322,6 +322,86 @@ export class DynamoRepository implements Repository {
     }
   }
 
+  async trashFolder(
+    userId: string,
+    folderId: string,
+    deletedAt: string,
+    purgeAfter: string,
+  ): Promise<FolderRecord | undefined> {
+    const pk = `USER#${userId}`;
+    try {
+      const result = await this.doc.send(new UpdateCommand({
+        TableName: this.tableName,
+        Key: { pk, sk: `FOLDER#${folderId}` },
+        // Hiding only the root preserves every descendant record and its
+        // identity. Restoring the root therefore restores the exact tree,
+        // rather than attempting an unsafe client-side reconstruction.
+        ConditionExpression: "entity = :folder AND (attribute_not_exists(#state) OR #state = :active)",
+        UpdateExpression: "SET #state = :trashed, deletedAt = :deletedAt, purgeAfter = :purgeAfter, gsi4pk = :gsi4pk, gsi4sk = :gsi4sk, gsi5pk = :gsi5pk, gsi5sk = :gsi5sk REMOVE gsi1pk, gsi1sk",
+        ExpressionAttributeNames: { "#state": "state" },
+        ExpressionAttributeValues: {
+          ":folder": "FOLDER", ":active": "active", ":trashed": "trashed",
+          ":deletedAt": deletedAt, ":purgeAfter": purgeAfter,
+          ":gsi4pk": `${pk}#TRASH`,
+          ":gsi4sk": `PURGE#${purgeAfter}#FOLDER#${folderId}`,
+          ":gsi5pk": "PURGE",
+          ":gsi5sk": `AT#${purgeAfter}#USER#${userId}#FOLDER#${folderId}`,
+        },
+        ReturnValues: "ALL_NEW",
+      }));
+      return result.Attributes as FolderRecord | undefined;
+    } catch (error) {
+      if (!isConditionFailure(error)) throw error;
+      const current = await this.findFolderById(userId, folderId);
+      return current?.state === "trashed" ? current : undefined;
+    }
+  }
+
+  async restoreFolder(userId: string, folderId: string): Promise<FolderRecord | undefined> {
+    const pk = `USER#${userId}`;
+    const existing = await this.findFolderById(userId, folderId);
+    if (existing === undefined || existing.state !== "trashed") return undefined;
+    try {
+      const result = await this.doc.send(new UpdateCommand({
+        TableName: this.tableName,
+        Key: { pk, sk: `FOLDER#${folderId}` },
+        ConditionExpression: "entity = :folder AND #state = :trashed",
+        UpdateExpression: "SET #state = :active, gsi1pk = :gsi1pk, gsi1sk = :gsi1sk REMOVE deletedAt, purgeAfter, gsi4pk, gsi4sk, gsi5pk, gsi5sk",
+        ExpressionAttributeNames: { "#state": "state" },
+        ExpressionAttributeValues: {
+          ":folder": "FOLDER", ":trashed": "trashed", ":active": "active",
+          ":gsi1pk": `${pk}#PARENT#${existing.parentFolderId ?? "ROOT"}`,
+          ":gsi1sk": existing.name,
+        },
+        ReturnValues: "ALL_NEW",
+      }));
+      return result.Attributes as FolderRecord | undefined;
+    } catch (error) {
+      if (isConditionFailure(error)) return undefined;
+      throw error;
+    }
+  }
+
+  async listTrashedFolders(userId: string): Promise<FolderRecord[]> {
+    const pk = `USER#${userId}`;
+    const out: FolderRecord[] = [];
+    let cursor: Record<string, unknown> | undefined;
+    do {
+      const page = await this.doc.send(new QueryCommand({
+        TableName: this.tableName,
+        IndexName: "gsi4",
+        KeyConditionExpression: "gsi4pk = :gsi4pk",
+        FilterExpression: "pk = :pk AND entity = :folder AND #state = :trashed",
+        ExpressionAttributeNames: { "#state": "state" },
+        ExpressionAttributeValues: { ":gsi4pk": `${pk}#TRASH`, ":pk": pk, ":folder": "FOLDER", ":trashed": "trashed" },
+        ExclusiveStartKey: cursor as never,
+      }));
+      out.push(...((page.Items ?? []) as FolderRecord[]));
+      cursor = page.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (cursor !== undefined);
+    return out;
+  }
+
   async getIdempotentResult(
     userId: string,
     stashId: string,

@@ -35,5 +35,7 @@ describe("StashRetentionStack", () => {
     expect(actions).toEqual(expect.arrayContaining(["dynamodb:Query", "dynamodb:UpdateItem", "dynamodb:TransactWriteItems", "s3:DeleteObject", "logs:CreateLogStream", "logs:PutLogEvents"]));
     expect(actions).not.toContain("s3:PutObject");
     expect(actions).not.toContain("s3:GetObject");
+    expect(JSON.stringify(policies)).toContain("/index/gsi1");
+    expect(JSON.stringify(policies)).toContain("/index/gsi5");
   });
 });

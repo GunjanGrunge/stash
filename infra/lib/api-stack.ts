@@ -98,6 +98,9 @@ interface RouteDefinition {
  * synthesize the event themselves.
  */
 const ROUTES: readonly RouteDefinition[] = [
+  { name: "create-folder", method: HttpMethod.POST, path: "/folders", timeout: WRITE_TIMEOUT, memoryMb: WRITE_MEMORY_MB },
+  { name: "trash-folder", method: HttpMethod.DELETE, path: "/folders/{id}", timeout: WRITE_TIMEOUT, memoryMb: WRITE_MEMORY_MB },
+  { name: "restore-folder", method: HttpMethod.POST, path: "/folders/{id}/restore", timeout: WRITE_TIMEOUT, memoryMb: WRITE_MEMORY_MB },
   { name: "create-download-lease", method: HttpMethod.POST, path: "/files/{id}/download-url", timeout: READ_TIMEOUT, memoryMb: READ_MEMORY_MB },
   {
     name: "trash-file",
