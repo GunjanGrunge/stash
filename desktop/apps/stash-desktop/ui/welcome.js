@@ -26,6 +26,7 @@ const signinForm = document.querySelector("#signin-form");
 const signinStatus = document.querySelector("#signin-status");
 const newPasswordForm = document.querySelector("#new-password-form");
 const newPasswordStatus = document.querySelector("#new-password-status");
+const signinRemember = document.querySelector("#signin-remember");
 
 // Carries the session token between the sign-in attempt and the
 // new-password challenge, if the account requires one. Never a token that
@@ -75,14 +76,15 @@ signinForm?.addEventListener("submit", async (event) => {
   }
   const username = document.querySelector("#signin-username")?.value ?? "";
   const password = document.querySelector("#signin-password")?.value ?? "";
+  const remember = Boolean(signinRemember?.checked);
   setStatus(signinStatus, "Signing in...");
   try {
-    const result = await invoke("sign_in", { username, password });
+    const result = await invoke("sign_in", { username, password, remember });
     if (result.outcome === "SignedIn") {
       setStatus(signinStatus, `Signed in as ${result.username}.`);
       showBrowserAfterSignIn();
     } else if (result.outcome === "NewPasswordRequired") {
-      pendingNewPassword = { session: result.session, username: result.username };
+      pendingNewPassword = { session: result.session, username: result.username, remember };
       setStatus(newPasswordStatus, "");
       showCard(newPasswordCard);
     }
@@ -104,6 +106,7 @@ newPasswordForm?.addEventListener("submit", async (event) => {
       username: pendingNewPassword.username,
       newPassword,
       session: pendingNewPassword.session,
+      remember: pendingNewPassword.remember,
     });
     if (result.outcome === "SignedIn") {
       pendingNewPassword = null;

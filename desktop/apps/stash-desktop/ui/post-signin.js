@@ -54,7 +54,7 @@
     if (!invoke) return;
     signOutAction.disabled = true;
     try { await invoke("sign_out"); window.location.reload(); }
-    catch (_) { signOutAction.disabled = false; setStatus("We couldn't sign you out. Try again.", "error"); }
+    catch (error) { signOutAction.disabled = false; setStatus(safeActionError(error, "We couldn't sign you out. Try again."), "error"); }
   });
   window.STASHBrowser = { show() { 
     // The browser is a full-screen authenticated view, not a panel below the

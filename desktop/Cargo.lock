@@ -4104,11 +4104,13 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "stash-core",
  "stash-s3-provider",
  "stash-windows-fs",
  "tauri",
  "tauri-build",
+ "walkdir",
  "windows",
  "winfsp",
 ]

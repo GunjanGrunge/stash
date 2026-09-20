@@ -19,9 +19,9 @@
 //! challenge instead of tokens on first sign-in; `complete_new_password`
 //! answers that second challenge.
 //!
-//! A rotating Cognito refresh token is kept in Windows Credential Manager so
-//! the desktop app can restore a session after restart. The password and the
-//! short-lived ID token are never persisted.
+//! When the creator opts in, a rotating Cognito refresh token is kept in
+//! Windows Credential Manager so the desktop app can restore a session after
+//! restart. The password and the short-lived ID token are never persisted.
 use aws_cognito_srp::{SrpClient, User, VerificationParameters};
 use aws_sdk_cognitoidentityprovider::config::{Credentials, Region};
 use aws_sdk_cognitoidentityprovider::types::{AuthFlowType, ChallengeNameType};
@@ -49,9 +49,7 @@ pub(crate) fn id_token() -> Result<String, String> {
 }
 
 fn retain_id_token(token: Option<&str>) -> Result<(), String> {
-    let token = token
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "Cognito accepted the password but returned no ID token.".to_string())?;
+    let token = validated_id_token(token)?;
     *ID_TOKEN
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -59,26 +57,103 @@ fn retain_id_token(token: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
+fn validated_id_token(token: Option<&str>) -> Result<&str, String> {
+    token
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Cognito accepted the password but returned no ID token.".to_string())
+}
+
 fn refresh_token_entry() -> Result<keyring::Entry, String> {
     keyring::Entry::new(REFRESH_TOKEN_SERVICE, REFRESH_TOKEN_ACCOUNT)
         .map_err(|_| "STASH couldn't access Windows Credential Manager.".to_string())
 }
 
-fn store_refresh_token(token: Option<&str>) -> Result<(), String> {
-    let token = token.filter(|value| !value.is_empty()).ok_or_else(|| {
-        "Cognito accepted the password but returned no refresh token.".to_string()
-    })?;
-    refresh_token_entry()?
-        // `set_password` converts text to UTF-16 before writing it. A rotated
-        // Cognito token can then exceed Credential Manager's small blob limit.
-        // It is opaque OAuth material, not a user password, so preserve it as
-        // its original UTF-8 bytes instead.
-        .set_secret(token.as_bytes())
-        .map_err(|_| "STASH couldn't save your sign-in session.".to_string())
+trait RefreshTokenStore {
+    fn read(&self) -> Result<Vec<u8>, ()>;
+    fn store(&self, token: &[u8]) -> Result<(), ()>;
+    fn clear(&self) -> Result<(), ()>;
 }
 
-fn clear_refresh_token() {
-    if let Ok(entry) = refresh_token_entry() { let _ = entry.delete_credential(); }
+struct CredentialManagerStore;
+
+impl RefreshTokenStore for CredentialManagerStore {
+    fn read(&self) -> Result<Vec<u8>, ()> {
+        refresh_token_entry()
+            .map_err(|_| ())?
+            .get_secret()
+            .map_err(|_| ())
+    }
+
+    fn store(&self, token: &[u8]) -> Result<(), ()> {
+        refresh_token_entry()
+            .map_err(|_| ())?
+            // `set_password` converts text to UTF-16 before writing it. A rotated
+            // Cognito token can then exceed Credential Manager's small blob limit.
+            // It is opaque OAuth material, not a user password, so preserve it as
+            // its original UTF-8 bytes instead.
+            .set_secret(token)
+            .map_err(|_| ())
+    }
+
+    fn clear(&self) -> Result<(), ()> {
+        let entry = refresh_token_entry().map_err(|_| ())?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err(()),
+        }
+    }
+}
+
+fn usable_refresh_token(bytes: Vec<u8>) -> Option<String> {
+    String::from_utf8(bytes)
+        .ok()
+        .filter(|token| !token.is_empty())
+}
+
+fn required_refresh_token(token: Option<&str>) -> Result<&str, String> {
+    token
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Cognito accepted the password but returned no refresh token.".to_string())
+}
+
+fn persist_initial_session<S: RefreshTokenStore>(
+    id_token: Option<&str>,
+    refresh_token: Option<&str>,
+    remember: bool,
+    store: &S,
+) -> Result<String, String> {
+    // Validate before any durable write. An incomplete Cognito response must
+    // never leave a remembered credential behind.
+    let id_token = validated_id_token(id_token)?;
+    if remember {
+        store
+            .store(required_refresh_token(refresh_token)?.as_bytes())
+            .map_err(|_| "STASH couldn't save your sign-in session.".to_string())?;
+    } else {
+        // Opting out must not turn a successful sign-in into a failure merely
+        // because an old local entry is inaccessible. Cleanup is best-effort.
+        let _ = store.clear();
+    }
+    Ok(id_token.to_owned())
+}
+
+fn restore_refresh_token<S: RefreshTokenStore>(store: &S) -> Option<String> {
+    match store.read() {
+        Ok(bytes) => match usable_refresh_token(bytes) {
+            Some(token) => Some(token),
+            None => {
+                let _ = store.clear();
+                None
+            }
+        },
+        Err(_) => {
+            // Delete directly rather than gating deletion on a successful
+            // read: corrupt or unreadable Credential Manager entries can
+            // still often be removed.
+            let _ = store.clear();
+            None
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -95,13 +170,22 @@ pub enum AuthOutcome {
 
 #[derive(Serialize)]
 #[serde(tag = "outcome")]
-pub enum RestoreOutcome { SignedIn, SignedOut }
+pub enum RestoreOutcome {
+    SignedIn,
+    SignedOut,
+}
 
 fn retain_initial_session(
     result: &aws_sdk_cognitoidentityprovider::types::AuthenticationResultType,
+    remember: bool,
 ) -> Result<(), String> {
-    retain_id_token(result.id_token())?;
-    store_refresh_token(result.refresh_token())
+    let id_token = persist_initial_session(
+        result.id_token(),
+        result.refresh_token(),
+        remember,
+        &CredentialManagerStore,
+    )?;
+    retain_id_token(Some(&id_token))
 }
 
 fn retain_restored_session(
@@ -115,7 +199,9 @@ fn retain_restored_session(
         .refresh_token()
         .is_some_and(|token| !token.is_empty())
     {
-        store_refresh_token(result.refresh_token())?;
+        CredentialManagerStore
+            .store(required_refresh_token(result.refresh_token())?.as_bytes())
+            .map_err(|_| "STASH couldn't save your sign-in session.".to_string())?;
     }
     Ok(())
 }
@@ -139,7 +225,11 @@ async fn cognito_client() -> Client {
 }
 
 #[tauri::command]
-pub async fn sign_in(username: String, password: String) -> Result<AuthOutcome, String> {
+pub async fn sign_in(
+    username: String,
+    password: String,
+    remember: bool,
+) -> Result<AuthOutcome, String> {
     let cognito = cognito_client().await;
     let srp = SrpClient::new(
         User::new(USER_POOL_ID, &username, &password),
@@ -213,7 +303,7 @@ pub async fn sign_in(username: String, password: String) -> Result<AuthOutcome, 
     }
 
     if let Some(result) = response.authentication_result.as_ref() {
-        retain_initial_session(result)?;
+        retain_initial_session(result, remember)?;
         Ok(AuthOutcome::SignedIn { username })
     } else {
         Err("Cognito accepted the password but returned no tokens.".to_string())
@@ -225,6 +315,7 @@ pub async fn complete_new_password(
     username: String,
     new_password: String,
     session: Option<String>,
+    remember: bool,
 ) -> Result<AuthOutcome, String> {
     let cognito = cognito_client().await;
     let response = cognito
@@ -239,7 +330,7 @@ pub async fn complete_new_password(
         .map_err(|err| describe_challenge_error(&err))?;
 
     if let Some(result) = response.authentication_result.as_ref() {
-        retain_initial_session(result)?;
+        retain_initial_session(result, remember)?;
         Ok(AuthOutcome::SignedIn { username })
     } else {
         Err("Cognito accepted the new password but returned no tokens.".to_string())
@@ -248,26 +339,23 @@ pub async fn complete_new_password(
 
 #[tauri::command]
 pub async fn restore_session() -> Result<RestoreOutcome, String> {
-    let refresh_token = match refresh_token_entry()?.get_secret() {
-        Ok(bytes) => String::from_utf8(bytes)
-            .ok()
-            .filter(|token| !token.is_empty()),
-        _ => return Ok(RestoreOutcome::SignedOut),
-    };
-    let Some(refresh_token) = refresh_token else {
+    let store = CredentialManagerStore;
+    let Some(refresh_token) = restore_refresh_token(&store) else {
         return Ok(RestoreOutcome::SignedOut);
     };
-    let response = cognito_client().await
+    let response = cognito_client()
+        .await
         .get_tokens_from_refresh_token()
         .client_id(CLIENT_ID)
         .refresh_token(refresh_token)
-        .send().await;
+        .send()
+        .await;
     let Ok(response) = response else {
-        clear_refresh_token();
+        let _ = store.clear();
         return Ok(RestoreOutcome::SignedOut);
     };
     let Some(result) = response.authentication_result() else {
-        clear_refresh_token();
+        let _ = store.clear();
         return Ok(RestoreOutcome::SignedOut);
     };
     retain_restored_session(result)?;
@@ -276,10 +364,13 @@ pub async fn restore_session() -> Result<RestoreOutcome, String> {
 
 #[tauri::command]
 pub fn sign_out() -> Result<(), String> {
-    clear_refresh_token();
-    *ID_TOKEN.get_or_init(|| Mutex::new(None)).lock()
+    *ID_TOKEN
+        .get_or_init(|| Mutex::new(None))
+        .lock()
         .map_err(|_| "Sign-in session is unavailable.".to_string())? = None;
-    Ok(())
+    CredentialManagerStore
+        .clear()
+        .map_err(|_| "STASH couldn't remove the remembered sign-in from this device.".to_string())
 }
 
 /// Maps a few common, actionable Cognito errors to plain messages. Anything
@@ -300,6 +391,47 @@ fn describe_challenge_error<E: std::fmt::Debug>(err: &E) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::{Cell, RefCell};
+
+    struct FakeStore {
+        read: Result<Vec<u8>, ()>,
+        store_error: bool,
+        clear_error: bool,
+        stored: RefCell<Vec<Vec<u8>>>,
+        clears: Cell<usize>,
+    }
+
+    impl RefreshTokenStore for FakeStore {
+        fn read(&self) -> Result<Vec<u8>, ()> {
+            self.read.clone()
+        }
+        fn store(&self, token: &[u8]) -> Result<(), ()> {
+            if self.store_error {
+                Err(())
+            } else {
+                self.stored.borrow_mut().push(token.to_vec());
+                Ok(())
+            }
+        }
+        fn clear(&self) -> Result<(), ()> {
+            self.clears.set(self.clears.get() + 1);
+            if self.clear_error {
+                Err(())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn fake_store(read: Result<Vec<u8>, ()>) -> FakeStore {
+        FakeStore {
+            read,
+            store_error: false,
+            clear_error: false,
+            stored: RefCell::new(Vec::new()),
+            clears: Cell::new(0),
+        }
+    }
 
     #[test]
     fn signed_in_outcome_never_serializes_token_material() {
@@ -324,5 +456,59 @@ mod tests {
             serde_json::to_string(&RestoreOutcome::SignedOut).expect("outcome is serializable"),
             r#"{"outcome":"SignedOut"}"#
         );
+    }
+
+    #[test]
+    fn only_nonempty_utf8_refresh_material_is_eligible_for_restore() {
+        assert_eq!(
+            usable_refresh_token(b"opaque-refresh-material".to_vec()).as_deref(),
+            Some("opaque-refresh-material")
+        );
+        assert_eq!(usable_refresh_token(Vec::new()), None);
+        assert_eq!(usable_refresh_token(vec![0xff]), None);
+    }
+
+    #[test]
+    fn opted_in_persists_only_after_validating_the_id_token() {
+        let store = fake_store(Err(()));
+        assert_eq!(
+            persist_initial_session(Some("id"), Some("refresh"), true, &store),
+            Ok("id".to_string())
+        );
+        assert_eq!(store.stored.borrow().as_slice(), [b"refresh".to_vec()]);
+
+        let store = fake_store(Err(()));
+        assert!(persist_initial_session(None, Some("refresh"), true, &store).is_err());
+        assert!(store.stored.borrow().is_empty());
+    }
+
+    #[test]
+    fn opted_out_cleanup_is_best_effort_but_opted_in_storage_failure_is_reported() {
+        let store = FakeStore {
+            clear_error: true,
+            ..fake_store(Err(()))
+        };
+        assert_eq!(
+            persist_initial_session(Some("id"), None, false, &store),
+            Ok("id".to_string())
+        );
+        assert_eq!(store.clears.get(), 1);
+
+        let store = FakeStore {
+            store_error: true,
+            ..fake_store(Err(()))
+        };
+        assert!(persist_initial_session(Some("id"), Some("refresh"), true, &store).is_err());
+    }
+
+    #[test]
+    fn invalid_or_unreadable_entries_are_cleared_before_restore_is_abandoned() {
+        let invalid = fake_store(Ok(vec![0xff]));
+        assert_eq!(restore_refresh_token(&invalid), None);
+        assert_eq!(invalid.clears.get(), 1);
+
+        let unreadable = fake_store(Err(()));
+        assert_eq!(restore_refresh_token(&unreadable), None);
+        assert_eq!(unreadable.clears.get(), 1);
     }
 }

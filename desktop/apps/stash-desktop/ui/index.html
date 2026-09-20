@@ -21,7 +21,7 @@
         <button class="window-control" type="button" data-window-action="toggle-maximize" aria-label="Maximize or restore window" title="Maximize or restore">
           <svg viewBox="0 0 10 10" aria-hidden="true"><rect x="1.5" y="1.5" width="7" height="7" /></svg>
         </button>
-        <button class="window-control window-control-close" type="button" data-window-action="close" aria-label="Close window" title="Close">
+        <button class="window-control window-control-close" type="button" data-window-action="close" aria-label="Hide STASH to tray" title="Hide STASH to tray">
           <svg viewBox="0 0 10 10" aria-hidden="true"><path d="m1.5 1.5 7 7m0-7-7 7" /></svg>
         </button>
       </div>
@@ -49,6 +49,10 @@
           <label class="field">
             <span>Password</span>
             <input id="signin-password" name="password" type="password" autocomplete="current-password" required />
+          </label>
+          <label class="remember-choice">
+            <input id="signin-remember" name="remember" type="checkbox" />
+            <span>Remember me on this device</span>
           </label>
           <div class="actions">
             <button class="button button-primary" type="submit">Sign in</button>
@@ -85,7 +89,8 @@
             <p class="eyebrow">Mounted drive</p>
             <p id="mount-status">Not mounted</p>
             <button id="mount-action" class="button button-primary" type="button">Mount STASH</button>
-            <button id="signout-action" class="button button-secondary" type="button">Sign out</button>
+            <button id="signout-action" class="button button-secondary" type="button" aria-describedby="signout-description">Sign out</button>
+            <p id="signout-description" class="signout-description">Sign out removes remembered sign-in from this device.</p>
           </div>
         </aside>
         <section class="browser-content">

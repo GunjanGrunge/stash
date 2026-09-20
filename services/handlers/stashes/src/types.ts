@@ -57,6 +57,8 @@ export interface StashFileRef {
   fileId: string;
   state: "pending" | "uploading" | "committed" | "failed";
   sizeBytes: number;
+  /** True when an earlier file abort already returned this file's reservation. */
+  quotaReleased?: boolean;
   originalRelativePath?: string;
   checksum?: string;
   rootFolderId?: string;

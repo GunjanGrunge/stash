@@ -300,6 +300,7 @@ export class DynamoStashRepository implements StashRepository {
         const fileId = item["fileId"];
         const state = item["state"];
         const sizeBytes = item["sizeBytes"];
+        const quotaReleased = item["quotaReleased"];
         const originalRelativePath = item["originalRelativePath"];
         const checksum = item["checksum"];
         const rootFolderId = item["rootFolderId"];
@@ -308,6 +309,7 @@ export class DynamoStashRepository implements StashRepository {
           fileId,
           state: state as StashFileRef["state"],
           sizeBytes: typeof sizeBytes === "number" ? sizeBytes : 0,
+          quotaReleased: quotaReleased === true,
           originalRelativePath: typeof originalRelativePath === "string" ? originalRelativePath : undefined,
           checksum: typeof checksum === "string" ? checksum : undefined,
           rootFolderId: typeof rootFolderId === "string" ? rootFolderId : undefined,

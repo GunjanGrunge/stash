@@ -14,11 +14,11 @@ use reqwest::blocking::Client as BlockingClient;
 use serde::{Deserialize, Serialize};
 use stash_core::ReadError;
 use stash_s3_provider::{HttpRangeProvider, LeaseSource};
-use stash_windows_fs::{StashFile, StashFileSystemContext};
+use stash_windows_fs::{StashFile, StashFileSystemContext, WriteSink, WriteSpool};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use winfsp::host::{FileSystemHost, FileSystemParams, FineGuard, VolumeParams};
 use windows::Win32::System::LibraryLoader::{LoadLibraryW, SetDllDirectoryW};
+use winfsp::host::{FileSystemHost, FileSystemParams, FineGuard, VolumeParams};
 
 const MOUNT_LETTER: &str = "S:";
 const SEGMENT_SIZE: u64 = 1 << 20; // 1 MiB
@@ -31,7 +31,29 @@ const WINFSP_DLL: &str = "winfsp-x86.dll";
 #[cfg(target_arch = "aarch64")]
 const WINFSP_DLL: &str = "winfsp-a64.dll";
 
-type LiveHost = FileSystemHost<StashFileSystemContext<HttpRangeProvider<ApiLeaseSource>>, FineGuard>;
+type LiveHost =
+    FileSystemHost<StashFileSystemContext<HttpRangeProvider<ApiLeaseSource>>, FineGuard>;
+
+#[derive(Clone)]
+struct MountWriteSink {
+    uploads: crate::upload::UploadController,
+}
+
+impl WriteSink for MountWriteSink {
+    fn begin(&self, name: &[u16]) -> Result<WriteSpool, String> {
+        WriteSpool::create_for_mount(name)
+    }
+
+    fn submit(&self, spool: WriteSpool) -> Result<(), String> {
+        match self.uploads.submit_mount_spool(spool) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.uploads.mark_needs_attention(error.clone());
+                Err(error)
+            }
+        }
+    }
+}
 
 /// Loads the installed WinFsp DLL by its absolute installation path before
 /// the delay-loaded binding asks Windows for it by name. Development builds
@@ -40,10 +62,10 @@ type LiveHost = FileSystemHost<StashFileSystemContext<HttpRangeProvider<ApiLease
 fn preload_winfsp() -> Result<(), String> {
     let roots = ["ProgramFiles(x86)", "ProgramFiles"];
     for variable in roots {
-        let Some(root) = std::env::var_os(variable) else { continue };
-        let directory = std::path::PathBuf::from(root)
-            .join("WinFsp")
-            .join("bin");
+        let Some(root) = std::env::var_os(variable) else {
+            continue;
+        };
+        let directory = std::path::PathBuf::from(root).join("WinFsp").join("bin");
         let candidate = directory.join(WINFSP_DLL);
         if !candidate.is_file() {
             continue;
@@ -131,20 +153,39 @@ impl From<&MountState> for MountStatus {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct MountController {
     state: Arc<Mutex<MountState>>,
     host: Arc<Mutex<Option<LiveHost>>>,
+    write_sink: Arc<MountWriteSink>,
+}
+
+impl Default for MountController {
+    fn default() -> Self {
+        Self::with_uploads(crate::upload::UploadController::default())
+    }
 }
 
 impl MountController {
+    pub fn with_uploads(uploads: crate::upload::UploadController) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(MountState::default())),
+            host: Arc::new(Mutex::new(None)),
+            write_sink: Arc::new(MountWriteSink { uploads }),
+        }
+    }
     pub fn status(&self) -> MountStatus {
         let state = self.state.lock().expect("mount state lock poisoned");
         MountStatus::from(&*state)
     }
 
     pub async fn mount(&self) -> Result<MountStatus, String> {
-        if self.state.lock().expect("mount state lock poisoned").mounted {
+        if self
+            .state
+            .lock()
+            .expect("mount state lock poisoned")
+            .mounted
+        {
             return Ok(self.status());
         }
 
@@ -152,14 +193,18 @@ impl MountController {
         // before a host is created; otherwise a delay-load exception can
         // escape the native boundary and terminate the desktop process.
         preload_winfsp()?;
-        winfsp::winfsp_init()
-            .map_err(|err| format!("STASH couldn't initialize the Windows drive service: {err:?}"))?;
+        winfsp::winfsp_init().map_err(|err| {
+            format!("STASH couldn't initialize the Windows drive service: {err:?}")
+        })?;
 
         // An account with no committed files is still a valid STASH: mount
         // it as an empty, usable root directory. Explorer and creative apps
         // can then use the same S: drive before the first file arrives.
         let files = crate::api::list_root_files().await?;
-        let context = StashFileSystemContext::new(mount_entries(files));
+        let context = StashFileSystemContext::new_with_write_sink(
+            mount_entries(files),
+            self.write_sink.clone(),
+        );
 
         // WinFSP's host/mount/dispatcher calls are blocking FFI, not async —
         // run them off the Tauri async runtime's own worker threads.
@@ -172,7 +217,7 @@ impl MountController {
                 .case_preserved_names(true)
                 .unicode_on_disk(true)
                 .persistent_acls(false)
-                .read_only_volume(true)
+                .read_only_volume(false)
                 .filesystem_name("STASH");
             let params = FileSystemParams::default_params(volume_params);
 
@@ -214,7 +259,9 @@ fn mount_entries(
 ) -> Vec<StashFile<HttpRangeProvider<ApiLeaseSource>>> {
     let mut entries = Vec::with_capacity(files.len());
     for file in files {
-        let Some(file_id) = file.file_id else { continue };
+        let Some(file_id) = file.file_id else {
+            continue;
+        };
         let provider = HttpRangeProvider::new(ApiLeaseSource { file_id });
         entries.push(StashFile::new(
             &file.name,

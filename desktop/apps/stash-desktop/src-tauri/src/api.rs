@@ -5,7 +5,7 @@
 //! persisted, or written to logs.
 
 use reqwest::{Client, StatusCode};
-use serde::Deserialize;
+use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::Value;
 
 const DEFAULT_API_URL: &str = "https://8ojdkvlefl.execute-api.ap-south-1.amazonaws.com";
@@ -26,12 +26,32 @@ struct ApiError {
 fn safe_http_error(status: StatusCode, body: &str) -> String {
     let parsed = serde_json::from_str::<ApiError>(body).ok();
     match parsed.and_then(|e| e.message.or(e.code)) {
-        Some(message) if message.len() <= 240 => message,
+        Some(message) if message.len() <= 240 && safe_message(&message) => message,
         _ if status == StatusCode::UNAUTHORIZED => {
             "Your sign-in has expired. Please sign in again.".to_string()
         }
         _ => format!("STASH returned an error ({})", status.as_u16()),
     }
+}
+
+fn safe_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    ![
+        "http://",
+        "https://",
+        "s3://",
+        "presigned",
+        "bearer ",
+        "authorization",
+        "credential",
+        "object key",
+        "upload id",
+        "etag",
+        "token",
+        "secret",
+    ]
+    .iter()
+    .any(|term| lower.contains(term))
 }
 
 async fn get_json(path: &str) -> Result<Value, String> {
@@ -44,6 +64,60 @@ async fn get_json(path: &str) -> Result<Value, String> {
         .map_err(|_| {
             "STASH could not be reached. Check your connection and try again.".to_string()
         })?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|_| "STASH returned an unreadable response.".to_string())?;
+    if !status.is_success() {
+        return Err(safe_http_error(status, &body));
+    }
+    serde_json::from_str(&body).map_err(|_| "STASH returned an unreadable response.".to_string())
+}
+
+pub(crate) struct UploadApi {
+    client: Client,
+}
+
+impl UploadApi {
+    pub(crate) fn new() -> Self {
+        Self {
+            client: Client::new(),
+        }
+    }
+
+    pub(crate) async fn post<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &Value,
+        idempotency: Option<String>,
+    ) -> Result<T, String> {
+        let token = crate::auth::id_token()?;
+        let mut request = self
+            .client
+            .post(format!("{}{path}", api_url()))
+            .bearer_auth(token)
+            .json(body);
+        if let Some(key) = idempotency {
+            request = request.header("Idempotency-Key", key);
+        }
+        let response = request.send().await.map_err(|_| {
+            "STASH could not be reached. Check your connection and try again.".to_string()
+        })?;
+        decode_json(response).await
+    }
+
+    pub(crate) async fn post_value(
+        &self,
+        path: &str,
+        body: &Value,
+        idempotency: Option<String>,
+    ) -> Result<Value, String> {
+        self.post(path, body, idempotency).await
+    }
+}
+
+async fn decode_json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, String> {
     let status = response.status();
     let body = response
         .text()
@@ -93,7 +167,10 @@ pub(crate) struct ChildItem {
 pub(crate) async fn list_root_files() -> Result<Vec<ChildItem>, String> {
     let response = get_json("/folders/ROOT/children").await?;
     let items: Vec<ChildItem> = serde_json::from_value(
-        response.get("items").cloned().unwrap_or(Value::Array(vec![])),
+        response
+            .get("items")
+            .cloned()
+            .unwrap_or(Value::Array(vec![])),
     )
     .map_err(|_| "STASH returned an unreadable file list.".to_string())?;
     Ok(items

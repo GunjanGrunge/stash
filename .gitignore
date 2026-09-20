@@ -26,3 +26,6 @@ cdk.out/
 
 # Rust build output (desktop/ Cargo workspace)
 target/
+
+# Local Tauri development output
+desktop/tauri-run.*.log

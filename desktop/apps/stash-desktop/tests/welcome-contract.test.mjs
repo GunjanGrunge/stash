@@ -9,12 +9,15 @@ const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
 const readBytes = (path) => readFile(new URL(path, import.meta.url));
 const sha256 = (contents) => createHash("sha256").update(contents).digest("hex");
 const testDirectory = dirname(fileURLToPath(import.meta.url));
+const uiRoot = join(testDirectory, "../ui");
+const generatedUiDirectories = new Set([join(uiRoot, "node_modules"), join(uiRoot, "dist"), join(uiRoot, "test")]);
 
 async function shellFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = await Promise.all(entries.map(async (entry) => {
     const path = join(directory, entry.name);
-    return entry.isDirectory() ? (["target", "gen"].includes(entry.name) ? [] : shellFiles(path)) : [path];
+    const skipDirectory = ["target", "gen"].includes(entry.name) || generatedUiDirectories.has(path);
+    return entry.isDirectory() ? (skipDirectory ? [] : shellFiles(path)) : [path];
   }));
   return files.flat();
 }
@@ -43,6 +46,7 @@ function buildWelcomeDom({ accountActions = [], controls = [], titlebar = fakeEl
     "#new-password-status": fakeElement(),
     "#signin-username": fakeElement(),
     "#signin-password": fakeElement(),
+    "#signin-remember": fakeElement({ checked: false }),
     "#new-password": fakeElement(),
   };
   const document = {
@@ -66,8 +70,22 @@ function interactiveElement(dataset = {}) {
 test("custom chrome supplies accessible controls and excludes them from the drag region", async () => {
   const html = await read("../ui/index.html");
   assert.match(html, /<header class="titlebar" data-window-drag-region>/);
-  for (const [action, label] of [["minimize", "Minimize window"], ["toggle-maximize", "Maximize or restore window"], ["close", "Close window"]]) assert.match(html, new RegExp(`data-window-action="${action}"[^>]*aria-label="${label}"`));
+  for (const [action, label] of [["minimize", "Minimize window"], ["toggle-maximize", "Maximize or restore window"], ["close", "Hide STASH to tray"]]) assert.match(html, new RegExp(`data-window-action="${action}"[^>]*aria-label="${label}"`));
   assert.doesNotMatch(html, /data-window-drag-region[^>]*data-window-action|data-window-action[^>]*data-window-drag-region/);
+});
+
+test("the active React close control honestly hides STASH to the tray", async () => {
+  const source = await read("../ui/src/components/TitleBar.tsx");
+  assert.match(source, /aria-label="Hide STASH to tray"/);
+  assert.match(source, /title="Hide STASH to tray"/);
+  assert.match(source, /act\("close"\)/);
+  assert.doesNotMatch(source, /aria-label="Close window"|title="Close"/);
+});
+
+test("the active gateway keeps the existing mount IPC command names", async () => {
+  const source = await read("../ui/src/platform/tauri/gateway.ts");
+  for (const command of ["mount_status", "mount_stash", "unmount_stash"]) assert.match(source, new RegExp(`\\"${command}\\"`));
+  assert.match(source, /type AllowedCommand = .*mount_status.*mount_stash.*unmount_stash/);
 });
 
 test("window controls invoke only native actions and title-bar dragging ignores buttons", async () => {
@@ -109,7 +127,7 @@ test("cancelling sign-in returns to the welcome card", async () => {
   assert.equal(elements[".welcome-card"].hidden, false);
 });
 
-test("submitting sign-in invokes the sign_in command and shows success", async () => {
+test("submitting sign-in passes an explicit unchecked remembered-session preference", async () => {
   const { document, elements } = buildWelcomeDom();
   elements["#signin-username"].value = "person@example.com";
   elements["#signin-password"].value = "correct horse battery staple";
@@ -124,7 +142,7 @@ test("submitting sign-in invokes the sign_in command and shows success", async (
 
   assert.deepEqual(calledWith, {
     command: "sign_in",
-    args: { username: "person@example.com", password: "correct horse battery staple" },
+    args: { username: "person@example.com", password: "correct horse battery staple", remember: false },
   });
   assert.equal(elements["#signin-status"].textContent, "Signed in as person@example.com.");
 });
@@ -136,10 +154,11 @@ test("a remembered session is restored only through Rust IPC", async () => {
   assert.doesNotMatch(source, /refresh.?token|password.*storage|localStorage/i);
 });
 
-test("a NEW_PASSWORD_REQUIRED outcome shows the new-password card, and completing it signs in", async () => {
+test("a NEW_PASSWORD_REQUIRED outcome preserves the remembered-session preference", async () => {
   const { document, elements } = buildWelcomeDom();
   elements["#signin-username"].value = "person@example.com";
   elements["#signin-password"].value = "TemporaryPass123!";
+  elements["#signin-remember"].checked = true;
 
   let completeCalledWith;
   const invoke = async (command, args) => {
@@ -153,15 +172,28 @@ test("a NEW_PASSWORD_REQUIRED outcome shows the new-password card, and completin
 
   await elements["#signin-form"].listeners.submit({ preventDefault() {} });
   assert.equal(elements["#new-password-card"].hidden, false);
-
   elements["#new-password"].value = "BrandNewPassword456!";
   await elements["#new-password-form"].listeners.submit({ preventDefault() {} });
 
   assert.deepEqual(completeCalledWith, {
     command: "complete_new_password",
-    args: { username: "person@example.com", newPassword: "BrandNewPassword456!", session: "session-token" },
+    args: { username: "person@example.com", newPassword: "BrandNewPassword456!", session: "session-token", remember: true },
   });
   assert.equal(elements["#new-password-status"].textContent, "Signed in as person@example.com.");
+});
+
+test("remembered-session choices have real labels and focus treatment", async () => {
+  const [html, css, source] = await Promise.all([read("../ui/index.html"), read("../ui/styles.css"), read("../ui/welcome.js")]);
+  const rememberInput = html.match(/<input id="signin-remember"[^>]*>/)?.[0] ?? "";
+  assert.match(rememberInput, /type="checkbox"/);
+  assert.doesNotMatch(rememberInput, /\schecked(?:\s|=|>)/);
+  assert.match(html, /<label class="remember-choice">\s*<input id="signin-remember"[^>]*type="checkbox"[^>]*>\s*<span>Remember me on this device<\/span>/s);
+  assert.doesNotMatch(html, /id="new-password-remember"/);
+  assert.match(html, /<button id="signout-action"[^>]*aria-describedby="signout-description"/);
+  assert.match(html, /<p id="signout-description"[^>]*>Sign out removes remembered sign-in from this device\.<\/p>/);
+  assert.match(css, /\.remember-choice:focus-within/);
+  assert.match(source, /invoke\("sign_in", \{ username, password, remember \}\)/);
+  assert.match(source, /remember: pendingNewPassword\.remember/);
 });
 
 test("a rejected sign-in shows the error message, not a silent failure", async () => {
@@ -239,4 +271,12 @@ test("layout permits responsive, scaled-content scrolling without splash art", a
   assert.match(css, /@media \(max-width: 560px\)/);
   assert.doesNotMatch(css, /\.art|STASH_splash/);
   assert.doesNotMatch(css, /body\s*\{[^}]*overflow: hidden;/);
+});
+
+test("Tauri loads the generated React entry after migration", async () => {
+  const config = JSON.parse(await read("../src-tauri/tauri.conf.json"));
+  const generated = await read("../ui/dist/index.html");
+  assert.equal(config.build.frontendDist, "../ui/dist");
+  assert.match(generated, /assets\/index-[^\"]+\.js/);
+  assert.doesNotMatch(generated, /welcome\.js|post-signin\.js/);
 });
