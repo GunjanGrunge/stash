@@ -38,7 +38,8 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
   const [searchQuery, setSearchQuery] = useState({ text: "", at: 0 });
 
   const loadUsage = () => {
-    setUsage({ status: "loading" });
+    // Keep showing the last known usage while it refreshes.
+    setUsage((previous) => previous.status === "ready" || previous.status === "stale" ? { status: "stale", data: previous.data, message: "Refreshing storage…" } : { status: "loading" });
     void gateway.library.getUsage().then((data) => setUsage({ status: "ready", data })).catch((error) => setUsage({ status: "offline", message: safeActionError(error, "Storage unavailable") }));
   };
 
@@ -89,6 +90,7 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
 
   const openStash = useCallback(() => { setNotice(""); setDroppedSource(undefined); setStashOpen(true); }, []);
   const navigate = (item: NavItem) => {
+    setStashOpen(false);
     setActive(item);
     setNotice(item === "Recent Stashes" ? gateway.unavailable("recent-stashes") : "");
   };
@@ -141,9 +143,12 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
       <div className="app-workspace">
         <TopBar onSearch={search} mounted={mounted} mountBusy={mountBusy} mountText={mountText} mountActionError={mountActionError} onToggleMount={toggleMount} />
         {notice && active !== "Recent Stashes" && <p className="app-notice" role="status">{notice}</p>}
-        <div className="app-screen">{mainContent}</div>
+        <div className="app-screen">
+          {stashOpen
+            ? <StashItScreen gateway={gateway} initialSource={droppedSource} onClose={closeStash} onStatus={stashStatus} onOpenFiles={() => { closeStash(); setActive("Files"); }} />
+            : mainContent}
+        </div>
       </div>
-      {stashOpen && <StashItScreen gateway={gateway} initialSource={droppedSource} onClose={closeStash} onStatus={stashStatus} />}
     </div>
   );
 }

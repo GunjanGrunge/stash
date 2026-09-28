@@ -168,7 +168,7 @@ export function createTauriGateway(): DesktopGateway {
     auth: { signIn, completeNewPassword, clearPendingChallenge, restoreSession: async () => { clearPendingChallenge(); try { return await call("restore_session", undefined, restoreOutcome); } catch (error) { clearPendingChallenge(); throw error; } }, signOut: async () => { clearPendingChallenge(); await call("sign_out", undefined, () => undefined); } },
     library: { listChildren: (folderId) => call("list_children", { folderId: validFolderId(folderId) }, childList), createFolder: (name, parentFolderId) => call("create_folder", { name, parentFolderId: validFolderId(parentFolderId) }, childItem), trashFolder: async (folderId) => { await call("trash_folder", { folderId: validFolderId(folderId) }, () => undefined); }, getUsage: () => call("get_usage", undefined, usage), mountStatus: () => call("mount_status", undefined, mountStatus), mountStash: () => call("mount_stash", undefined, mountStatus), unmountStash: () => call("unmount_stash", undefined, mountStatus), search: (query, refresh = false) => call("search_stash", { query: query.slice(0, 200), refresh }, searchResponse) },
     stash: {
-      selectSource: (kind) => call("select_stash_source", { kind }, sourceSummary),
+      selectSource: (kind, start) => call("select_stash_source", { kind, start: start && ["desktop", "downloads", "documents"].includes(start) ? start : null }, sourceSummary),
       confirm: () => call("confirm_stash", undefined, transferStatus),
       status: () => call("get_transfer_status", undefined, transferStatus),
       cancel: () => call("cancel_stash", undefined, transferStatus),

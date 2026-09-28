@@ -1,6 +1,8 @@
 import type { AuthOutcome, ChildItem, MountStatus, NativeDropNotice, RestoreOutcome, SearchResponse, SourceSummary, TransferStatus, Usage } from "../domain/types";
 
 export type WindowAction = "minimize" | "toggle-maximize" | "close";
+/** Folders the Stash it picker can open in; the native side allow-lists these. */
+export type StashStart = "desktop" | "downloads" | "documents";
 
 export type DesktopGateway = {
   readonly kind: "tauri" | "unavailable";
@@ -24,7 +26,8 @@ export type DesktopGateway = {
     search(query: string, refresh?: boolean): Promise<SearchResponse>;
   };
   stash: {
-    selectSource(kind: "file" | "folder"): Promise<SourceSummary>;
+    /** Opens the native picker, optionally starting in a known folder. */
+    selectSource(kind: "file" | "folder", start?: StashStart): Promise<SourceSummary>;
     confirm(): Promise<TransferStatus>;
     status(): Promise<TransferStatus>;
     cancel(): Promise<TransferStatus>;

@@ -153,7 +153,7 @@ export function runThemeAccessibilityContracts(): FoundationSummary {
 
 export function runWritePathUiContracts(): FoundationSummary {
   for (const token of ["onCompleteRef", "finishedRef", "clearTimeout", "onClick={complete}"]) if (!splashSource.includes(token)) throw new Error(`Splash lifecycle contract missing: ${token}`);
-  for (const token of ["onNativeDrop", "is-drag-over", "Choose file", "Choose folder", "Paths stay in the native STASH boundary"]) if (!stashItSource.includes(token)) throw new Error(`Drop entry contract missing: ${token}`);
+  for (const token of ["onNativeDrop", "is-drag-over", "Choose file", "Choose folder", "Release to Stash it"]) if (!stashItSource.includes(token)) throw new Error(`Drop entry contract missing: ${token}`);
   if (!shellSource.includes("UnavailableScreen") || /active === \"Files\" \|\| active === \"Search\"/.test(shellSource)) throw new Error("Unavailable navigation destinations silently reuse Files.");
   for (const label of ["Search", "Recent Stashes"]) if (!unavailableSource.includes("STASH capability notice") || !shellSource.includes(label)) throw new Error(`Navigation notice missing: ${label}`);
   if (!shellSource.includes("onNativeDrop") || !shellSource.includes("setDragOver")) throw new Error("Home drag-over subscription is missing.");
