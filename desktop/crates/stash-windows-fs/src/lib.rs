@@ -1,13 +1,16 @@
 //! WinFSP boundary: maps `STASH (S:)` filesystem operations (open, read,
 //! enumerate, stat) onto the platform-agnostic core (`stash-core`'s
 //! `Cache`/`RangeProvider`). This crate owns no network logic itself — it
-//! only translates between WinFSP's callback shapes and the core's already
-//! range-verified, bounded-failure reads.
+//! only translates between WinFSP's callback shapes and a [`Library`] that
+//! lists folders and opens files.
 //!
-//! Scope for the feasibility spike: a single flat root directory of
-//! read-only files. No subdirectories, no write path, no rename/delete —
-//! those are out of scope until the mount itself is proven (see the spike
-//! spec's Boundaries & Constraints).
+//! Scope: the user's full folder hierarchy, read-only for committed files.
+//! Each folder is listed from the [`Library`] when Windows first asks for it
+//! and re-listed after a short freshness window, so files Stashed from the
+//! app (or another device) appear on the drive without remounting. If a
+//! refresh fails, the last good listing keeps serving (PRD §9: communicate
+//! network state rather than going blank). New root-level files may be
+//! written; folders, rename and delete are not supported yet.
 //!
 //! ## Why the logic is split from the trait impl
 //! `winfsp::filesystem::FileSystemContext::open` and `::read_directory` take
@@ -21,11 +24,13 @@
 //! thin, deliberately small adapter on top, verified only by the separately
 //! gated live-mount check (`desktop/tests/mount-spike/`).
 use stash_core::{Cache, RangeProvider, ReadError};
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{
     STATUS_ACCESS_DENIED, STATUS_INVALID_DEVICE_REQUEST, STATUS_IO_DEVICE_ERROR,
     STATUS_MEDIA_WRITE_PROTECTED, STATUS_NETWORK_UNREACHABLE, STATUS_OBJECT_NAME_COLLISION,
@@ -51,30 +56,61 @@ fn debug_mount_trace(event: &str) {
 #[cfg(not(debug_assertions))]
 fn debug_mount_trace(_event: &str) {}
 
-/// One read-only file exposed at the mount root.
-pub struct StashFile<P: RangeProvider> {
-    pub name: U16CString,
-    pub size: u64,
-    pub cache: Cache,
-    pub provider: P,
+/// One child of a STASH folder, as the control plane lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Listing {
+    Folder { id: String, name: String },
+    File { id: String, name: String, size: u64 },
 }
 
-impl<P: RangeProvider> StashFile<P> {
-    pub fn new(
-        name: &str,
-        size: u64,
-        segment_size: u64,
-        timeout: std::time::Duration,
-        provider: P,
-    ) -> Self {
+/// Where the drive's folders and file bytes come from. Implemented over the
+/// authenticated STASH API by the desktop app; faked in tests.
+pub trait Library: Send + Sync {
+    type Provider: RangeProvider;
+    /// Children of a folder; `None` is the top level of the user's STASH.
+    fn list(&self, folder_id: Option<&str>) -> Result<Vec<Listing>, ReadError>;
+    /// A range provider for one committed file's bytes.
+    fn open_file(&self, file_id: &str) -> Self::Provider;
+    /// Bytes used against the quota, for Explorer's free-space display.
+    fn used_bytes(&self) -> Option<u64> {
+        None
+    }
+}
+
+/// Tunables for a mounted drive.
+#[derive(Clone, Copy, Debug)]
+pub struct DriveOptions {
+    pub segment_size: u64,
+    pub read_timeout: Duration,
+    /// How long a folder listing is reused before it is fetched again.
+    pub listing_ttl: Duration,
+    /// Per-file in-memory segment budget.
+    pub file_cache_bytes: u64,
+}
+
+impl Default for DriveOptions {
+    fn default() -> Self {
         Self {
-            name: U16CString::from_str(name).expect("file name must not contain interior NUL"),
-            size,
-            cache: Cache::new(segment_size, timeout, size, 64 * 1024 * 1024),
-            provider,
+            segment_size: 1 << 20,
+            read_timeout: Duration::from_secs(20),
+            listing_ttl: Duration::from_secs(3),
+            file_cache_bytes: 64 * 1024 * 1024,
         }
     }
 }
+
+/// One open committed file. Shared by every handle to the same file id so
+/// repeated opens (Explorer thumbnails, a DAW re-reading headers) reuse the
+/// same verified segment cache.
+pub struct OpenFile<P: RangeProvider> {
+    size: u64,
+    cache: Cache,
+    provider: P,
+}
+
+/// Open files kept for cache reuse beyond this are dropped once no handle
+/// holds them.
+const OPEN_FILE_KEEP: usize = 64;
 
 /// A native sink receives a completed spool. The filesystem crate does not
 /// know about Tauri, HTTP, credentials, or the STASH API.
@@ -198,10 +234,12 @@ impl WriteSink for RejectWriteSink {
     }
 }
 
-/// An open handle: root, a committed read-only file, or one new root-level file.
-pub enum Handle {
-    Root,
-    File(usize),
+
+/// An open handle: a folder (`None` is the drive root), a committed
+/// read-only file, or one new root-level file being written.
+pub enum Handle<P: RangeProvider> {
+    Dir(Option<String>),
+    File(Arc<OpenFile<P>>),
     Pending(Arc<Mutex<PendingWrite>>),
 }
 
@@ -291,15 +329,6 @@ impl PendingWrite {
             .flush()
     }
 }
-
-/// What resolving a path against the root entry table found. Plain enum —
-/// no WinFSP types involved — so path resolution is fully unit-testable.
-enum Resolved {
-    Root,
-    File(usize),
-    NotFound,
-}
-
 /// Maps `ReadError` (network/verification failures already bounded by
 /// `Cache`) onto an NTSTATUS. `Offline`/`Timeout` become network-unreachable
 /// rather than a generic device error, so Explorer/creative apps surface a
@@ -337,26 +366,145 @@ fn root_name(file_name: &U16CStr) -> Option<Vec<u16>> {
     Some(name.to_vec())
 }
 
-/// Writable only for newly-created root-level files; committed entries remain
-/// read-only and the injected sink owns the upload policy.
-pub struct StashFileSystemContext<P: RangeProvider> {
-    entries: Vec<StashFile<P>>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum NodeKind {
+    Folder(String),
+    File { id: String, size: u64 },
+}
+
+/// A folder child with its on-drive name.
+#[derive(Clone, Debug)]
+struct Node {
+    name: U16CString,
+    /// Case-folded name: the volume is case-insensitive, case-preserving.
+    folded: String,
+    kind: NodeKind,
+}
+
+struct CachedDir {
+    at: Instant,
+    nodes: Arc<Vec<Node>>,
+}
+
+/// What resolving a path found. Plain enum — no WinFSP types involved — so
+/// path resolution is fully unit-testable.
+#[derive(Debug, PartialEq, Eq)]
+enum Resolved {
+    Dir(Option<String>),
+    File { id: String, size: u64 },
+    NotFound,
+}
+
+/// One directory-enumeration row, before it is written into WinFSP's buffer.
+#[derive(Debug, PartialEq, Eq)]
+struct DirRow {
+    name: Vec<u16>,
+    kind: RowKind,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RowKind {
+    Dot,
+    Folder,
+    File(u64),
+}
+
+const DOT: &[u16] = &[b'.' as u16];
+const DOT_DOT: &[u16] = &[b'.' as u16, b'.' as u16];
+
+/// Builds the sorted, de-duplicated child table for one folder. Names that
+/// cannot exist on a Windows volume are skipped rather than shown broken.
+fn nodes_from(listing: Vec<Listing>) -> Vec<Node> {
+    let mut nodes: Vec<Node> = listing
+        .into_iter()
+        .filter_map(|entry| {
+            let (name, kind) = match entry {
+                Listing::Folder { id, name } => (name, NodeKind::Folder(id)),
+                Listing::File { id, name, size } => (name, NodeKind::File { id, size }),
+            };
+            let valid = !name.is_empty()
+                && name != "."
+                && name != ".."
+                && !name.chars().any(|c| matches!(c, '\\' | '/' | ':' | '\0'));
+            if !valid {
+                return None;
+            }
+            Some(Node {
+                folded: name.to_lowercase(),
+                name: U16CString::from_str(&name).ok()?,
+                kind,
+            })
+        })
+        .collect();
+    nodes.sort_by(|a, b| a.name.as_slice().cmp(b.name.as_slice()));
+    // Case-insensitive volume: keep the first of any names differing by case.
+    let mut seen = std::collections::HashSet::new();
+    nodes.retain(|node| seen.insert(node.folded.clone()));
+    nodes
+}
+
+/// Pure enumeration order for one folder: `.` and `..` first for any folder
+/// but the root, then children in name order, all strictly after `marker`.
+fn dir_rows(is_root: bool, nodes: &[Node], marker: Option<&[u16]>) -> Vec<DirRow> {
+    let mut rows = Vec::new();
+    let children_from_start = matches!(marker, None) || marker == Some(DOT) || marker == Some(DOT_DOT);
+    if !is_root {
+        if marker.is_none() {
+            rows.push(DirRow { name: DOT.to_vec(), kind: RowKind::Dot });
+        }
+        if marker.is_none() || marker == Some(DOT) {
+            rows.push(DirRow { name: DOT_DOT.to_vec(), kind: RowKind::Dot });
+        }
+    }
+    for node in nodes {
+        if !children_from_start && Some(node.name.as_slice()) <= marker {
+            continue;
+        }
+        rows.push(DirRow {
+            name: node.name.as_slice().to_vec(),
+            kind: match node.kind {
+                NodeKind::Folder(_) => RowKind::Folder,
+                NodeKind::File { size, .. } => RowKind::File(size),
+            },
+        });
+    }
+    rows
+}
+
+/// Current time as a Windows FILETIME (100 ns ticks since 1601-01-01).
+fn filetime_now() -> u64 {
+    const UNIX_EPOCH_AS_FILETIME: u64 = 116_444_736_000_000_000;
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| UNIX_EPOCH_AS_FILETIME + d.as_nanos() as u64 / 100)
+        .unwrap_or(UNIX_EPOCH_AS_FILETIME)
+}
+
+/// Committed files are read-only; the root accepts new root-level files and
+/// the injected sink owns the upload policy.
+pub struct StashFileSystemContext<L: Library> {
+    library: L,
+    options: DriveOptions,
+    dirs: Mutex<HashMap<Option<String>, CachedDir>>,
+    open_files: Mutex<HashMap<String, Arc<OpenFile<L::Provider>>>>,
+    /// Shown as every item's date until the control plane records one.
+    mounted_at: u64,
     write_sink: Arc<dyn WriteSink>,
     pending_names: Mutex<std::collections::HashSet<Vec<u16>>>,
 }
 
-impl<P: RangeProvider> StashFileSystemContext<P> {
-    pub fn new(entries: Vec<StashFile<P>>) -> Self {
-        Self::new_with_write_sink(entries, Arc::new(RejectWriteSink))
+impl<L: Library> StashFileSystemContext<L> {
+    pub fn new(library: L, options: DriveOptions) -> Self {
+        Self::new_with_write_sink(library, options, Arc::new(RejectWriteSink))
     }
 
-    pub fn new_with_write_sink(
-        mut entries: Vec<StashFile<P>>,
-        write_sink: Arc<dyn WriteSink>,
-    ) -> Self {
-        entries.sort_by(|a, b| a.name.as_slice().cmp(b.name.as_slice()));
+    pub fn new_with_write_sink(library: L, options: DriveOptions, write_sink: Arc<dyn WriteSink>) -> Self {
         Self {
-            entries,
+            library,
+            options,
+            dirs: Mutex::new(HashMap::new()),
+            open_files: Mutex::new(HashMap::new()),
+            mounted_at: filetime_now(),
             write_sink,
             pending_names: Mutex::new(std::collections::HashSet::new()),
         }
@@ -379,69 +527,122 @@ impl<P: RangeProvider> StashFileSystemContext<P> {
             .remove(name);
     }
 
-    /// Pure path resolution: no WinFSP types in or out. This is the piece
-    /// worth testing thoroughly — `open` and `get_security_by_name` are both
-    /// thin wrappers around it.
-    fn resolve(&self, file_name: &U16CStr) -> Resolved {
-        match root_name(file_name) {
-            None => Resolved::Root,
-            Some(name) if name.is_empty() => Resolved::NotFound,
-            Some(name) => match self.entries.iter().position(|e| e.name.as_slice() == name) {
-                Some(index) => Resolved::File(index),
-                None => Resolved::NotFound,
+    /// A folder's children: the cached listing while fresh, otherwise a new
+    /// one from the library. On a failed refresh the last good listing is
+    /// served instead of an error. No lock is held across the network call.
+    fn children(&self, folder: Option<&str>) -> Result<Arc<Vec<Node>>, ReadError> {
+        let key = folder.map(str::to_string);
+        if let Some(cached) = self.dirs.lock().expect("dir cache lock poisoned").get(&key) {
+            if cached.at.elapsed() < self.options.listing_ttl {
+                return Ok(cached.nodes.clone());
+            }
+        }
+        match self.library.list(folder) {
+            Ok(listing) => {
+                let nodes = Arc::new(nodes_from(listing));
+                self.dirs
+                    .lock()
+                    .expect("dir cache lock poisoned")
+                    .insert(key, CachedDir { at: Instant::now(), nodes: nodes.clone() });
+                Ok(nodes)
+            }
+            Err(error) => match self.dirs.lock().expect("dir cache lock poisoned").get(&key) {
+                Some(stale) => Ok(stale.nodes.clone()),
+                None => Err(error),
             },
         }
     }
 
-    fn root_file_info(&self) -> FileInfo {
+    /// Pure path resolution against the (lazily listed) folder tree.
+    fn resolve(&self, file_name: &U16CStr) -> Result<Resolved, ReadError> {
+        let Ok(path) = file_name.to_string() else {
+            return Ok(Resolved::NotFound);
+        };
+        let parts: Vec<&str> = path.split('\\').filter(|part| !part.is_empty()).collect();
+        let mut folder: Option<String> = None;
+        for (index, part) in parts.iter().enumerate() {
+            let folded = part.to_lowercase();
+            let nodes = self.children(folder.as_deref())?;
+            let Some(node) = nodes.iter().find(|node| node.folded == folded) else {
+                return Ok(Resolved::NotFound);
+            };
+            match &node.kind {
+                NodeKind::Folder(id) => folder = Some(id.clone()),
+                NodeKind::File { id, size } if index + 1 == parts.len() => {
+                    return Ok(Resolved::File { id: id.clone(), size: *size });
+                }
+                NodeKind::File { .. } => return Ok(Resolved::NotFound),
+            }
+        }
+        Ok(Resolved::Dir(folder))
+    }
+
+    /// The shared open-file state for a committed file id.
+    fn open_file(&self, id: &str, size: u64) -> Arc<OpenFile<L::Provider>> {
+        let mut open = self.open_files.lock().expect("open file lock poisoned");
+        if let Some(file) = open.get(id) {
+            if file.size == size {
+                return file.clone();
+            }
+        }
+        if open.len() >= OPEN_FILE_KEEP {
+            open.retain(|_, file| Arc::strong_count(file) > 1);
+        }
+        let file = Arc::new(OpenFile {
+            size,
+            cache: Cache::new(self.options.segment_size, self.options.read_timeout, size, self.options.file_cache_bytes),
+            provider: self.library.open_file(id),
+        });
+        open.insert(id.to_string(), file.clone());
+        file
+    }
+
+    fn times(&self, info: &mut FileInfo) {
+        info.creation_time = self.mounted_at;
+        info.last_access_time = self.mounted_at;
+        info.last_write_time = self.mounted_at;
+        info.change_time = self.mounted_at;
+    }
+
+    fn dir_info(&self) -> FileInfo {
         let mut info = FileInfo::default();
         info.file_attributes = FILE_ATTRIBUTE_DIRECTORY.0;
+        self.times(&mut info);
         info
     }
 
-    fn file_info_for(&self, index: usize) -> FileInfo {
-        let entry = &self.entries[index];
+    fn file_info(&self, size: u64) -> FileInfo {
         let mut info = FileInfo::default();
         info.file_attributes = FILE_ATTRIBUTE_READONLY.0;
-        info.file_size = entry.size;
-        info.allocation_size = entry.size;
+        info.file_size = size;
+        info.allocation_size = size;
+        self.times(&mut info);
         info
     }
 
-    /// Pure directory-enumeration order: entries strictly after `after` in
-    /// sorted name order. `after` stands in for `DirMarker::inner()`'s
-    /// output (owned rather than borrowed, so this has no lifetime tied to
-    /// the marker and can be tested without constructing a real one).
-    fn entries_after<'e>(
-        &'e self,
-        after: Option<Vec<u16>>,
-    ) -> impl Iterator<Item = (usize, &'e StashFile<P>)> {
-        self.entries.iter().enumerate().filter(move |(_, entry)| {
-            after
-                .as_deref()
-                .is_none_or(|after| entry.name.as_slice() > after)
-        })
-    }
-
-    /// Pure read: bytes for a known-good file index. `read()` (the trait
-    /// method) only adds the `Handle`-variant match on top of this.
-    fn read_file(&self, index: usize, buffer: &mut [u8], offset: u64) -> FspResult<u32> {
-        let entry = &self.entries[index];
-        if offset >= entry.size {
+    /// Pure read: bytes for one open committed file.
+    fn read_file(&self, file: &OpenFile<L::Provider>, buffer: &mut [u8], offset: u64) -> FspResult<u32> {
+        if offset >= file.size {
             return Ok(0);
         }
-        let length = (buffer.len() as u64).min(entry.size - offset);
-        let bytes = entry
+        let length = (buffer.len() as u64).min(file.size - offset);
+        let bytes = file
             .cache
-            .read(&entry.provider, offset, length)
+            .read(&file.provider, offset, length)
             .map_err(read_error_to_fsp)?;
         buffer[..bytes.len()].copy_from_slice(&bytes);
         Ok(bytes.len() as u32)
     }
+
+    /// Whether a root-level name is already taken by a listed item.
+    fn root_has(&self, name: &[u16]) -> Result<bool, ReadError> {
+        let folded = String::from_utf16_lossy(name).to_lowercase();
+        Ok(self.children(None)?.iter().any(|node| node.folded == folded))
+    }
 }
 
-impl<P: RangeProvider> FileSystemContext for StashFileSystemContext<P> {
-    type FileContext = Handle;
+impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
+    type FileContext = Handle<L::Provider>;
 
     fn get_security_by_name(
         &self,
@@ -449,19 +650,12 @@ impl<P: RangeProvider> FileSystemContext for StashFileSystemContext<P> {
         _security_descriptor: Option<&mut [c_void]>,
         _reparse_point_resolver: impl FnOnce(&U16CStr) -> Option<FileSecurity>,
     ) -> FspResult<FileSecurity> {
-        match self.resolve(file_name) {
-            Resolved::Root => Ok(FileSecurity {
-                reparse: false,
-                sz_security_descriptor: 0,
-                attributes: FILE_ATTRIBUTE_DIRECTORY.0,
-            }),
-            Resolved::File(_) => Ok(FileSecurity {
-                reparse: false,
-                sz_security_descriptor: 0,
-                attributes: FILE_ATTRIBUTE_READONLY.0,
-            }),
-            Resolved::NotFound => Err(FspError::NTSTATUS(STATUS_OBJECT_NAME_NOT_FOUND.0)),
-        }
+        let attributes = match self.resolve(file_name).map_err(read_error_to_fsp)? {
+            Resolved::Dir(_) => FILE_ATTRIBUTE_DIRECTORY.0,
+            Resolved::File { .. } => FILE_ATTRIBUTE_READONLY.0,
+            Resolved::NotFound => return Err(FspError::NTSTATUS(STATUS_OBJECT_NAME_NOT_FOUND.0)),
+        };
+        Ok(FileSecurity { reparse: false, sz_security_descriptor: 0, attributes })
     }
 
     fn open(
@@ -471,14 +665,14 @@ impl<P: RangeProvider> FileSystemContext for StashFileSystemContext<P> {
         _granted_access: u32,
         file_info: &mut OpenFileInfo,
     ) -> FspResult<Self::FileContext> {
-        match self.resolve(file_name) {
-            Resolved::Root => {
-                *file_info.as_mut() = self.root_file_info();
-                Ok(Handle::Root)
+        match self.resolve(file_name).map_err(read_error_to_fsp)? {
+            Resolved::Dir(folder) => {
+                *file_info.as_mut() = self.dir_info();
+                Ok(Handle::Dir(folder))
             }
-            Resolved::File(index) => {
-                *file_info.as_mut() = self.file_info_for(index);
-                Ok(Handle::File(index))
+            Resolved::File { id, size } => {
+                *file_info.as_mut() = self.file_info(size);
+                Ok(Handle::File(self.open_file(&id, size)))
             }
             Resolved::NotFound => Err(FspError::NTSTATUS(STATUS_OBJECT_NAME_NOT_FOUND.0)),
         }
@@ -509,11 +703,7 @@ impl<P: RangeProvider> FileSystemContext for StashFileSystemContext<P> {
             debug_mount_trace("create: rejected directory or unsafe name");
             return Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0));
         }
-        if self
-            .entries
-            .iter()
-            .any(|entry| entry.name.as_slice() == name)
-        {
+        if self.root_has(&name).map_err(read_error_to_fsp)? {
             debug_mount_trace("create: rejected existing name");
             return Err(FspError::NTSTATUS(STATUS_OBJECT_NAME_COLLISION.0));
         }
@@ -570,8 +760,8 @@ impl<P: RangeProvider> FileSystemContext for StashFileSystemContext<P> {
         file_info: &mut FileInfo,
     ) -> FspResult<()> {
         *file_info = match context {
-            Handle::Root => self.root_file_info(),
-            Handle::File(index) => self.file_info_for(*index),
+            Handle::Dir(_) => self.dir_info(),
+            Handle::File(file) => self.file_info(file.size),
             Handle::Pending(pending) => {
                 let mut info = FileInfo::default();
                 info.file_attributes = FILE_ATTRIBUTE_NORMAL.0;
@@ -585,9 +775,9 @@ impl<P: RangeProvider> FileSystemContext for StashFileSystemContext<P> {
 
     fn read(&self, context: &Self::FileContext, buffer: &mut [u8], offset: u64) -> FspResult<u32> {
         match context {
-            Handle::File(index) => self.read_file(*index, buffer, offset),
+            Handle::File(file) => self.read_file(file, buffer, offset),
             Handle::Pending(_) => Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0)),
-            Handle::Root => Err(FspError::NTSTATUS(STATUS_INVALID_DEVICE_REQUEST.0)),
+            Handle::Dir(_) => Err(FspError::NTSTATUS(STATUS_INVALID_DEVICE_REQUEST.0)),
         }
     }
 
@@ -694,17 +884,19 @@ impl<P: RangeProvider> FileSystemContext for StashFileSystemContext<P> {
         marker: DirMarker,
         buffer: &mut [u8],
     ) -> FspResult<u32> {
-        if !matches!(context, Handle::Root) {
+        let Handle::Dir(folder) = context else {
             return Err(FspError::NTSTATUS(STATUS_INVALID_DEVICE_REQUEST.0));
-        }
-        // Root has no parent within this mount, so unlike a real subdirectory
-        // we never emit "." / "..": there is nothing to enumerate above it.
+        };
+        let nodes = self.children(folder.as_deref()).map_err(read_error_to_fsp)?;
         let mut cursor = 0u32;
         let mut dir_info: DirInfo<255> = DirInfo::new();
-        for (index, entry) in self.entries_after(marker.inner().map(|s| s.to_vec())) {
+        for row in dir_rows(folder.is_none(), &nodes, marker.inner()) {
             dir_info.reset();
-            *dir_info.file_info_mut() = self.file_info_for(index);
-            dir_info.set_name_raw(entry.name.as_slice())?;
+            *dir_info.file_info_mut() = match row.kind {
+                RowKind::Dot | RowKind::Folder => self.dir_info(),
+                RowKind::File(size) => self.file_info(size),
+            };
+            dir_info.set_name_raw(row.name.as_slice())?;
             if !dir_info.append_to_buffer(buffer, &mut cursor) {
                 return Ok(cursor);
             }
@@ -714,13 +906,9 @@ impl<P: RangeProvider> FileSystemContext for StashFileSystemContext<P> {
     }
 
     fn get_volume_info(&self, out_volume_info: &mut VolumeInfo) -> FspResult<()> {
-        // Nominal 1 TB ceiling matches the PRD's private-beta per-user quota;
-        // this mount reflects one user's committed files, not a real device.
+        // Nominal 1 TB ceiling matches the PRD's private-beta per-user quota.
         let total: u64 = 1_000_000_000_000;
-        let used: u64 = self
-            .entries
-            .iter()
-            .fold(0u64, |total, entry| total.saturating_add(entry.size));
+        let used = self.library.used_bytes().unwrap_or(0);
         out_volume_info.total_size = total;
         out_volume_info.free_size = total.saturating_sub(used);
         out_volume_info.set_volume_label("STASH");
@@ -731,144 +919,234 @@ impl<P: RangeProvider> FileSystemContext for StashFileSystemContext<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     /// A `RangeProvider` over a fixed in-memory buffer, standing in for the
-    /// real `stash-s3-provider::HttpRangeProvider` so these tests exercise
-    /// `StashFileSystemContext` without a network or a live WinFSP mount.
+    /// real `stash-s3-provider::HttpRangeProvider`.
     struct FixedProvider {
-        data: &'static [u8],
-        calls: AtomicUsize,
+        data: Vec<u8>,
     }
 
     impl RangeProvider for FixedProvider {
-        fn fetch(
-            &self,
-            offset: u64,
-            length: u64,
-            _timeout: Duration,
-        ) -> Result<stash_core::Segment, ReadError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
+        fn fetch(&self, offset: u64, length: u64, _timeout: Duration) -> Result<stash_core::Segment, ReadError> {
             let start = offset as usize;
             let end = (start + length as usize).min(self.data.len());
-            let bytes = self.data[start..end].to_vec();
-            Ok(stash_core::Segment { bytes })
+            Ok(stash_core::Segment { bytes: self.data[start..end].to_vec() })
         }
     }
 
-    fn one_file_context() -> StashFileSystemContext<FixedProvider> {
-        let provider = FixedProvider {
-            data: b"hello stash world",
-            calls: AtomicUsize::new(0),
-        };
-        let file = StashFile::new("kick.wav", 18, 8, Duration::from_secs(2), provider);
-        StashFileSystemContext::new(vec![file])
+    /// An in-memory STASH: folder id → children, file id → bytes.
+    #[derive(Default)]
+    struct FakeLibrary {
+        folders: Mutex<HashMap<Option<String>, Vec<Listing>>>,
+        bytes: HashMap<String, Vec<u8>>,
+        list_calls: AtomicUsize,
+        opens: AtomicUsize,
+        offline: AtomicBool,
+    }
+
+    impl Library for FakeLibrary {
+        type Provider = FixedProvider;
+        fn list(&self, folder_id: Option<&str>) -> Result<Vec<Listing>, ReadError> {
+            self.list_calls.fetch_add(1, Ordering::SeqCst);
+            if self.offline.load(Ordering::SeqCst) {
+                return Err(ReadError::Offline);
+            }
+            Ok(self.folders.lock().unwrap().get(&folder_id.map(str::to_string)).cloned().unwrap_or_default())
+        }
+        fn open_file(&self, file_id: &str) -> FixedProvider {
+            self.opens.fetch_add(1, Ordering::SeqCst);
+            FixedProvider { data: self.bytes.get(file_id).cloned().unwrap_or_default() }
+        }
+        fn used_bytes(&self) -> Option<u64> {
+            Some(42)
+        }
+    }
+
+    fn folder(id: &str, name: &str) -> Listing {
+        Listing::Folder { id: id.into(), name: name.into() }
+    }
+    fn file(id: &str, name: &str, size: u64) -> Listing {
+        Listing::File { id: id.into(), name: name.into(), size }
+    }
+
+    /// `\KSHMR Vol 5\Kicks\Kick_G#_128.wav`, `\logo.svg`.
+    fn library() -> FakeLibrary {
+        let mut lib = FakeLibrary::default();
+        {
+            let mut folders = lib.folders.lock().unwrap();
+            folders.insert(None, vec![folder("pack", "KSHMR Vol 5"), file("logo", "logo.svg", 3)]);
+            folders.insert(Some("pack".into()), vec![folder("kicks", "Kicks")]);
+            folders.insert(Some("kicks".into()), vec![file("kick", "Kick_G#_128.wav", 17)]);
+        }
+        lib.bytes.insert("kick".into(), b"hello stash world".to_vec());
+        lib.bytes.insert("logo".into(), b"svg".to_vec());
+        lib
+    }
+
+    fn fs_with(lib: FakeLibrary, ttl: Duration) -> StashFileSystemContext<FakeLibrary> {
+        StashFileSystemContext::new(lib, DriveOptions { segment_size: 8, listing_ttl: ttl, ..DriveOptions::default() })
+    }
+
+    fn fs() -> StashFileSystemContext<FakeLibrary> {
+        fs_with(library(), Duration::from_secs(60))
     }
 
     fn path(s: &str) -> U16CString {
         U16CString::from_str(s).unwrap()
     }
 
-    #[test]
-    fn resolves_root_path_to_root() {
-        let fs = one_file_context();
-        assert!(matches!(fs.resolve(&path("\\")), Resolved::Root));
+    fn names(rows: &[DirRow]) -> Vec<String> {
+        rows.iter().map(|row| String::from_utf16_lossy(&row.name)).collect()
     }
 
     #[test]
-    fn empty_context_is_a_valid_empty_root_directory() {
-        let fs = StashFileSystemContext::<FixedProvider>::new(Vec::new());
-        assert!(matches!(fs.resolve(&path("\\")), Resolved::Root));
-        assert!(fs.entries_after(None).next().is_none());
+    fn root_resolves_to_the_top_level_folder() {
+        assert_eq!(fs().resolve(&path("\\")).unwrap(), Resolved::Dir(None));
     }
 
     #[test]
-    fn resolves_known_file_by_name() {
-        let fs = one_file_context();
-        assert!(matches!(fs.resolve(&path("\\kick.wav")), Resolved::File(0)));
+    fn nested_folders_and_files_resolve_at_any_depth() {
+        let fs = fs();
+        assert_eq!(fs.resolve(&path("\\KSHMR Vol 5")).unwrap(), Resolved::Dir(Some("pack".into())));
+        assert_eq!(fs.resolve(&path("\\KSHMR Vol 5\\Kicks")).unwrap(), Resolved::Dir(Some("kicks".into())));
+        assert_eq!(
+            fs.resolve(&path("\\KSHMR Vol 5\\Kicks\\Kick_G#_128.wav")).unwrap(),
+            Resolved::File { id: "kick".into(), size: 17 }
+        );
     }
 
     #[test]
-    fn resolves_unknown_name_to_not_found() {
-        let fs = one_file_context();
-        assert!(matches!(
-            fs.resolve(&path("\\missing.wav")),
-            Resolved::NotFound
-        ));
+    fn names_match_case_insensitively_like_a_windows_volume() {
+        assert_eq!(
+            fs().resolve(&path("\\kshmr vol 5\\KICKS\\kick_g#_128.WAV")).unwrap(),
+            Resolved::File { id: "kick".into(), size: 17 }
+        );
     }
 
     #[test]
-    fn reads_requested_range_through_the_core_cache() {
-        let fs = one_file_context();
+    fn missing_paths_and_paths_through_files_are_not_found() {
+        let fs = fs();
+        assert_eq!(fs.resolve(&path("\\missing.wav")).unwrap(), Resolved::NotFound);
+        assert_eq!(fs.resolve(&path("\\logo.svg\\inside")).unwrap(), Resolved::NotFound);
+    }
+
+    #[test]
+    fn listings_are_reused_while_fresh() {
+        let fs = fs();
+        fs.resolve(&path("\\logo.svg")).unwrap();
+        fs.resolve(&path("\\logo.svg")).unwrap();
+        assert_eq!(fs.library.list_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn files_stashed_after_mounting_appear_once_the_listing_is_stale() {
+        let fs = fs_with(library(), Duration::ZERO);
+        assert_eq!(fs.resolve(&path("\\new.wav")).unwrap(), Resolved::NotFound);
+        fs.library.folders.lock().unwrap().get_mut(&None).unwrap().push(file("new", "new.wav", 5));
+        assert_eq!(fs.resolve(&path("\\new.wav")).unwrap(), Resolved::File { id: "new".into(), size: 5 });
+    }
+
+    #[test]
+    fn a_failed_refresh_keeps_serving_the_last_good_listing() {
+        let fs = fs_with(library(), Duration::ZERO);
+        fs.resolve(&path("\\logo.svg")).unwrap();
+        fs.library.offline.store(true, Ordering::SeqCst);
+        assert_eq!(fs.resolve(&path("\\logo.svg")).unwrap(), Resolved::File { id: "logo".into(), size: 3 });
+    }
+
+    #[test]
+    fn offline_with_nothing_cached_is_a_network_error() {
+        let lib = library();
+        lib.offline.store(true, Ordering::SeqCst);
+        let err = fs_with(lib, Duration::ZERO).resolve(&path("\\logo.svg")).unwrap_err();
+        assert_eq!(read_error_to_fsp(err).to_ntstatus(), STATUS_NETWORK_UNREACHABLE.0);
+    }
+
+    #[test]
+    fn root_enumeration_has_no_dot_entries_and_is_sorted() {
+        let fs = fs();
+        let nodes = fs.children(None).unwrap();
+        assert_eq!(names(&dir_rows(true, &nodes, None)), vec!["KSHMR Vol 5", "logo.svg"]);
+    }
+
+    #[test]
+    fn subfolder_enumeration_starts_with_dot_entries_and_resumes_after_markers() {
+        let fs = fs();
+        let nodes = fs.children(Some("pack")).unwrap();
+        assert_eq!(names(&dir_rows(false, &nodes, None)), vec![".", "..", "Kicks"]);
+        assert_eq!(names(&dir_rows(false, &nodes, Some(DOT))), vec!["..", "Kicks"]);
+        assert_eq!(names(&dir_rows(false, &nodes, Some(DOT_DOT))), vec!["Kicks"]);
+        let kicks = path("Kicks");
+        assert!(dir_rows(false, &nodes, Some(kicks.as_slice())).is_empty());
+    }
+
+    #[test]
+    fn enumeration_rows_carry_folder_and_file_kinds() {
+        let fs = fs();
+        let nodes = fs.children(None).unwrap();
+        let rows = dir_rows(true, &nodes, None);
+        assert_eq!(rows[0].kind, RowKind::Folder);
+        assert_eq!(rows[1].kind, RowKind::File(3));
+    }
+
+    #[test]
+    fn unrepresentable_and_case_duplicate_names_are_skipped() {
+        let nodes = nodes_from(vec![
+            file("a", "ok.wav", 1),
+            file("b", "OK.wav", 1),
+            file("c", "bad:name.wav", 1),
+            folder("d", ".."),
+            file("e", "", 1),
+        ]);
+        let shown: Vec<String> = nodes.iter().map(|n| n.name.to_string_lossy()).collect();
+        assert_eq!(shown, vec!["OK.wav"]);
+    }
+
+    #[test]
+    fn nested_file_reads_through_the_core_cache() {
+        let fs = fs();
+        let open = fs.open_file("kick", 17);
         let mut buffer = [0u8; 5];
-        let read = fs.read_file(0, &mut buffer, 6).unwrap();
-        assert_eq!(read, 5);
+        assert_eq!(fs.read_file(&open, &mut buffer, 6).unwrap(), 5);
         assert_eq!(&buffer, b"stash");
+        assert_eq!(fs.read_file(&open, &mut buffer, 100).unwrap(), 0);
     }
 
     #[test]
-    fn read_past_end_of_file_is_bounded_end_of_file_status() {
-        let fs = one_file_context();
-        let mut buffer = [0u8; 4];
-        assert_eq!(fs.read_file(0, &mut buffer, 100).unwrap(), 0);
+    fn reopening_a_file_reuses_its_cache() {
+        let fs = fs();
+        let first = fs.open_file("kick", 17);
+        let second = fs.open_file("kick", 17);
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(fs.library.opens.load(Ordering::SeqCst), 1);
     }
 
     #[test]
-    fn read_reports_bounded_network_error_when_provider_is_offline() {
-        struct OfflineProvider;
-        impl RangeProvider for OfflineProvider {
-            fn fetch(&self, _: u64, _: u64, _: Duration) -> Result<stash_core::Segment, ReadError> {
-                Err(ReadError::Offline)
-            }
-        }
-        let file = StashFile::new(
-            "kick.wav",
-            18,
-            8,
-            Duration::from_millis(50),
-            OfflineProvider,
-        );
-        let fs = StashFileSystemContext::new(vec![file]);
-        let mut buffer = [0u8; 4];
-        let err = fs.read_file(0, &mut buffer, 0).unwrap_err();
-        assert_eq!(err.to_ntstatus(), STATUS_NETWORK_UNREACHABLE.0);
+    fn security_lookup_reports_folders_and_read_only_files() {
+        let fs = fs();
+        let dir = fs.get_security_by_name(&path("\\KSHMR Vol 5"), None, |_| None).unwrap();
+        assert_eq!(dir.attributes, FILE_ATTRIBUTE_DIRECTORY.0);
+        let file = fs.get_security_by_name(&path("\\KSHMR Vol 5\\Kicks\\Kick_G#_128.wav"), None, |_| None).unwrap();
+        assert_eq!(file.attributes, FILE_ATTRIBUTE_READONLY.0);
+        assert!(fs.get_security_by_name(&path("\\missing.wav"), None, |_| None).is_err());
     }
 
     #[test]
-    fn directory_enumeration_after_marker_skips_earlier_names_in_sort_order() {
-        let a = StashFile::new(
-            "a.wav",
-            1,
-            8,
-            Duration::from_secs(1),
-            FixedProvider {
-                data: b"a",
-                calls: AtomicUsize::new(0),
-            },
-        );
-        let b = StashFile::new(
-            "b.wav",
-            1,
-            8,
-            Duration::from_secs(1),
-            FixedProvider {
-                data: b"b",
-                calls: AtomicUsize::new(0),
-            },
-        );
-        let fs = StashFileSystemContext::new(vec![a, b]);
-
-        let from_start: Vec<_> = fs.entries_after(None).map(|(i, _)| i).collect();
-        assert_eq!(from_start, vec![0, 1]);
-
-        let a_name = path("a.wav");
-        let after_a: Vec<_> = fs
-            .entries_after(Some(a_name.as_slice().to_vec()))
-            .map(|(i, _)| i)
-            .collect();
-        assert_eq!(after_a, vec![1]);
+    fn items_get_a_real_date_instead_of_1601() {
+        let info = fs().file_info(1);
+        // 2020-01-01 as FILETIME.
+        assert!(info.last_write_time > 132_223_104_000_000_000);
     }
+
+    #[test]
+    fn root_collision_check_is_case_insensitive() {
+        let fs = fs();
+        assert!(fs.root_has(path("LOGO.SVG").as_slice()).unwrap());
+        assert!(!fs.root_has(path("new.wav").as_slice()).unwrap());
+    }
+
+    // --- Root-level write path (unchanged behaviour) ---
 
     struct CountingSink {
         submissions: AtomicUsize,
@@ -891,7 +1169,6 @@ mod tests {
         fn begin(&self, _name: &[u16]) -> Result<WriteSpool, String> {
             Err("begin failed".to_string())
         }
-
         fn submit(&self, _spool: WriteSpool) -> Result<(), String> {
             panic!("a failed begin must never submit")
         }
@@ -899,10 +1176,7 @@ mod tests {
 
     #[test]
     fn failed_begin_rolls_back_the_pending_name_reservation() {
-        let fs: StashFileSystemContext<FixedProvider> = StashFileSystemContext::new_with_write_sink(
-            Vec::new(),
-            Arc::new(FailingBeginSink),
-        );
+        let fs = StashFileSystemContext::new_with_write_sink(library(), DriveOptions::default(), Arc::new(FailingBeginSink));
         let name = path("retry.wav");
         assert!(fs.write_sink.begin(name.as_slice()).is_err());
         assert!(fs.reserve_pending_name(name.as_slice()));
@@ -911,7 +1185,7 @@ mod tests {
 
     #[test]
     fn concurrent_same_name_reservation_allows_exactly_one_handle() {
-        let fs = Arc::new(one_file_context());
+        let fs = Arc::new(fs());
         let name = path("concurrent.wav");
         let results = std::thread::scope(|scope| {
             (0..8)
@@ -929,11 +1203,9 @@ mod tests {
 
     #[test]
     fn failed_spool_write_is_not_submitted_and_name_can_be_reused() {
-        let sink = CountingSink {
-            submissions: AtomicUsize::new(0),
-        };
+        let sink = CountingSink { submissions: AtomicUsize::new(0) };
         let name = path("failed-write.wav");
-        let fs = one_file_context();
+        let fs = fs();
         assert!(fs.reserve_pending_name(name.as_slice()));
         let spool = WriteSpool::create_for_mount(name.as_slice()).unwrap();
         let mut pending = PendingWrite {
@@ -951,7 +1223,6 @@ mod tests {
         assert!(fs.reserve_pending_name(name.as_slice()));
         fs.release_pending_name(name.as_slice());
     }
-
 
     #[test]
     fn root_name_preserves_unicode_and_rejects_unsafe_paths() {
@@ -975,13 +1246,7 @@ mod tests {
     #[test]
     fn pending_spool_accepts_windows_style_resize_before_write() {
         let spool = WriteSpool::create_for_mount(path("resize.wav").as_slice()).unwrap();
-        let mut pending = PendingWrite {
-            spool: Some(spool),
-            reserved_name: None,
-            submitted: false,
-            failure: None,
-            size: 0,
-        };
+        let mut pending = PendingWrite { spool: Some(spool), reserved_name: None, submitted: false, failure: None, size: 0 };
         pending.set_size(8).unwrap();
         pending.write_at(b"ok", 2, false).unwrap();
         assert_eq!(pending.size, 8);
@@ -992,40 +1257,22 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_and_directory_names_are_rejected_before_sink_submission() {
-        let fs = one_file_context();
-        assert!(matches!(fs.resolve(&path("\\kick.wav")), Resolved::File(_)));
-        assert!(root_name(&path("\\folder\\")).unwrap().is_empty());
-        assert!(root_name(&path("\\new.wav")).unwrap().len() > 0);
-    }
-
-    #[test]
     fn cleanup_and_submission_are_idempotent() {
-        let sink = CountingSink {
-            submissions: AtomicUsize::new(0),
-        };
+        let sink = CountingSink { submissions: AtomicUsize::new(0) };
         let spool = WriteSpool::create_for_mount(path("once.wav").as_slice()).unwrap();
         let path = spool.path().to_path_buf();
-        let mut pending = PendingWrite {
-            spool: Some(spool),
-            reserved_name: None,
-            submitted: false,
-            failure: None,
-            size: 0,
-        };
+        let mut pending = PendingWrite { spool: Some(spool), reserved_name: None, submitted: false, failure: None, size: 0 };
         let pending_names = Mutex::new(std::collections::HashSet::new());
         pending.finalize(&sink, &pending_names);
         pending.finalize(&sink, &pending_names);
         assert_eq!(sink.submissions.load(Ordering::SeqCst), 1);
         assert!(!path.exists());
-        let _ = std::fs::remove_file(path);
     }
+
     #[test]
     fn successful_cleanup_releases_name_for_a_retry() {
-        let sink = CountingSink {
-            submissions: AtomicUsize::new(0),
-        };
-        let fs = one_file_context();
+        let sink = CountingSink { submissions: AtomicUsize::new(0) };
+        let fs = fs();
         let name = path("cleanup-retry.wav");
         assert!(fs.reserve_pending_name(name.as_slice()));
         let spool = WriteSpool::create_for_mount(name.as_slice()).unwrap();
@@ -1040,23 +1287,5 @@ mod tests {
         assert_eq!(sink.submissions.load(Ordering::SeqCst), 1);
         assert!(fs.reserve_pending_name(name.as_slice()));
         fs.release_pending_name(name.as_slice());
-    }
-
-
-    #[test]
-    fn security_lookup_preserves_directory_and_file_attributes() {
-        let fs = one_file_context();
-        let root = fs
-            .get_security_by_name(&path("\\"), None, |_| None)
-            .unwrap();
-        assert_eq!(root.attributes, FILE_ATTRIBUTE_DIRECTORY.0);
-
-        let file = fs
-            .get_security_by_name(&path("\\kick.wav"), None, |_| None)
-            .unwrap();
-        assert_eq!(file.attributes, FILE_ATTRIBUTE_READONLY.0);
-
-        let missing = fs.get_security_by_name(&path("\\missing.wav"), None, |_| None);
-        assert!(missing.is_err());
     }
 }

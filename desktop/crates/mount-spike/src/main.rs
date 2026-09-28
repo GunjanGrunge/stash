@@ -12,7 +12,7 @@ use std::thread;
 use std::time::Duration;
 
 use stash_s3_provider::{HttpRangeProvider, LeaseSource};
-use stash_windows_fs::{StashFile, StashFileSystemContext};
+use stash_windows_fs::{DriveOptions, Library, Listing, StashFileSystemContext};
 use winfsp::host::{FileSystemHost, FileSystemParams, FineGuard, VolumeParams};
 use winfsp::winfsp_init_or_die;
 
@@ -23,6 +23,27 @@ impl LeaseSource for FixedLease {
     }
     fn renew(&self) -> Result<String, stash_core::ReadError> {
         Ok(self.0.clone())
+    }
+}
+
+/// `S:\hello.txt` and `S:\Samples\hello.txt`, both served from the fixture.
+struct FixtureLibrary {
+    url: String,
+    size: u64,
+}
+
+impl Library for FixtureLibrary {
+    type Provider = HttpRangeProvider<FixedLease>;
+    fn list(&self, folder_id: Option<&str>) -> Result<Vec<Listing>, stash_core::ReadError> {
+        let hello = Listing::File { id: "hello".into(), name: "hello.txt".into(), size: self.size };
+        Ok(match folder_id {
+            None => vec![Listing::Folder { id: "samples".into(), name: "Samples".into() }, hello],
+            Some("samples") => vec![hello],
+            Some(_) => Vec::new(),
+        })
+    }
+    fn open_file(&self, _file_id: &str) -> Self::Provider {
+        HttpRangeProvider::new(FixedLease(self.url.clone()))
     }
 }
 
@@ -75,15 +96,9 @@ If you can read this in a text editor via S:\\hello.txt, the mount works.\r\n";
     let url = start_fixture_server(body);
     println!("Fixture server (stand-in for S3) listening at {url}");
 
-    let provider = HttpRangeProvider::new(FixedLease(url));
-    let file = StashFile::new(
-        "hello.txt",
-        body.len() as u64,
-        64,
-        Duration::from_secs(5),
-        provider,
-    );
-    let context = StashFileSystemContext::new(vec![file]);
+    let library = FixtureLibrary { url, size: body.len() as u64 };
+    let options = DriveOptions { segment_size: 64, read_timeout: Duration::from_secs(5), ..DriveOptions::default() };
+    let context = StashFileSystemContext::new(library, options);
 
     let mut volume_params = VolumeParams::new();
     volume_params
@@ -105,7 +120,7 @@ If you can read this in a text editor via S:\\hello.txt, the mount works.\r\n";
     );
     host.start().expect("failed to start the WinFSP dispatcher");
 
-    println!("STASH (S:) is mounted. Try: dir S:\\  and  type S:\\hello.txt");
+    println!("STASH (S:) is mounted. Try: dir S:\\  type S:\\hello.txt  and  type S:\\Samples\\hello.txt");
     println!("Press Ctrl+C to unmount and exit.");
 
     let running = Arc::new(AtomicBool::new(true));
