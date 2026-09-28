@@ -1,10 +1,10 @@
-import type { AuthOutcome, ChildItem, MountStatus, NativeDropNotice, RestoreOutcome, SourceSummary, TransferStatus, Usage } from "../../domain/types";
+import type { AuthOutcome, ChildItem, MountStatus, NativeDropNotice, RestoreOutcome, SearchHit, SearchKind, SearchResponse, SourceSummary, TransferStatus, Usage } from "../../domain/types";
 import type { DesktopGateway, WindowAction } from "../contracts";
 
 type Invoke = <T>(command: AllowedCommand, args?: Record<string, unknown>) => Promise<T>;
 type TauriWindow = { minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void>; startDragging(): Promise<void> };
 type TauriGlobals = { core?: { invoke?: Invoke }; window?: { getCurrentWindow?: () => TauriWindow }; event?: { listen?: <T>(name: string, handler: (event: { payload: T }) => void) => Promise<() => void> } };
-type AllowedCommand = "sign_in" | "complete_new_password" | "restore_session" | "sign_out" | "list_children" | "get_usage" | "create_folder" | "trash_folder" | "mount_status" | "mount_stash" | "unmount_stash" | "select_stash_source" | "confirm_stash" | "get_transfer_status" | "cancel_stash";
+type AllowedCommand = "sign_in" | "complete_new_password" | "restore_session" | "sign_out" | "list_children" | "get_usage" | "create_folder" | "trash_folder" | "mount_status" | "mount_stash" | "unmount_stash" | "select_stash_source" | "confirm_stash" | "get_transfer_status" | "cancel_stash" | "search_stash";
 type RecordValue = Record<string, unknown>;
 
 const getTauri = (): TauriGlobals | undefined => (globalThis as typeof globalThis & { __TAURI__?: TauriGlobals }).__TAURI__;
@@ -107,7 +107,25 @@ function transferStatus(value: unknown): TransferStatus {
   const manifestMatch = value.manifestMatch === "exact" || value.manifestMatch === "partial" || value.manifestMatch === "none" ? value.manifestMatch : null;
   return { phase: value.phase as TransferStatus["phase"], sourceName: typeof value.sourceName === "string" ? value.sourceName : null, fileCount: value.fileCount, completedFileCount: value.completedFileCount, totalBytes: value.totalBytes, completedBytes: value.completedBytes, manifestMatch, message: typeof value.message === "string" ? value.message : null };
 }
-
+const SEARCH_KINDS: readonly SearchKind[] = ["audio", "midi", "video", "image", "document", "other"];
+const optionalCount = (value: unknown): number | null => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+function searchHit(value: unknown): SearchHit | undefined {
+  if (!isRecord(value)) return undefined;
+  const fileId = safeId(value.fileId);
+  const name = safeText(value.name, 1024);
+  const path = safeText(value.path, 4096);
+  const sizeBytes = optionalCount(value.sizeBytes);
+  if (!fileId || !name || !path || sizeBytes === null) return undefined;
+  const kind = SEARCH_KINDS.includes(value.kind as SearchKind) ? value.kind as SearchKind : "other";
+  const key = typeof value.key === "string" && /^[A-G]#?m?$/.test(value.key) ? value.key : null;
+  const extension = typeof value.extension === "string" && value.extension.length <= 16 ? value.extension : null;
+  return { fileId, name, path, sizeBytes, kind, extension, bpm: optionalCount(value.bpm), key, resolution: optionalCount(value.resolution), fps: optionalCount(value.fps) };
+}
+export function searchResponse(value: unknown): SearchResponse {
+  if (!isRecord(value) || !Array.isArray(value.hits) || optionalCount(value.total) === null || optionalCount(value.indexedFiles) === null) throw new Error("STASH returned an invalid search result.");
+  const unsupported = Array.isArray(value.unsupported) ? value.unsupported.filter((p): p is string => typeof p === "string" && p.length <= 64) : [];
+  return { hits: value.hits.map(searchHit).filter((h): h is SearchHit => h !== undefined), total: value.total as number, unsupported, indexedFiles: value.indexedFiles as number, truncated: value.truncated === true };
+}
 
 export function createTauriGateway(): DesktopGateway {
   const tauri = getTauri();
@@ -148,7 +166,7 @@ export function createTauriGateway(): DesktopGateway {
     kind: "tauri",
     window: { act: (action) => windowActions[action](), startDragging: () => appWindow.startDragging() },
     auth: { signIn, completeNewPassword, clearPendingChallenge, restoreSession: async () => { clearPendingChallenge(); try { return await call("restore_session", undefined, restoreOutcome); } catch (error) { clearPendingChallenge(); throw error; } }, signOut: async () => { clearPendingChallenge(); await call("sign_out", undefined, () => undefined); } },
-    library: { listChildren: (folderId) => call("list_children", { folderId: validFolderId(folderId) }, childList), createFolder: (name, parentFolderId) => call("create_folder", { name, parentFolderId: validFolderId(parentFolderId) }, childItem), trashFolder: async (folderId) => { await call("trash_folder", { folderId: validFolderId(folderId) }, () => undefined); }, getUsage: () => call("get_usage", undefined, usage), mountStatus: () => call("mount_status", undefined, mountStatus), mountStash: () => call("mount_stash", undefined, mountStatus), unmountStash: () => call("unmount_stash", undefined, mountStatus) },
+    library: { listChildren: (folderId) => call("list_children", { folderId: validFolderId(folderId) }, childList), createFolder: (name, parentFolderId) => call("create_folder", { name, parentFolderId: validFolderId(parentFolderId) }, childItem), trashFolder: async (folderId) => { await call("trash_folder", { folderId: validFolderId(folderId) }, () => undefined); }, getUsage: () => call("get_usage", undefined, usage), mountStatus: () => call("mount_status", undefined, mountStatus), mountStash: () => call("mount_stash", undefined, mountStatus), unmountStash: () => call("unmount_stash", undefined, mountStatus), search: (query, refresh = false) => call("search_stash", { query: query.slice(0, 200), refresh }, searchResponse) },
     stash: {
       selectSource: (kind) => call("select_stash_source", { kind }, sourceSummary),
       confirm: () => call("confirm_stash", undefined, transferStatus),
@@ -165,6 +183,6 @@ export function createTauriGateway(): DesktopGateway {
 
 export function createUnavailableGateway(): DesktopGateway {
   const unavailable = async () => { throw new Error("Desktop connection is unavailable in this build."); };
-  return { kind: "unavailable", window: { act: unavailable, startDragging: unavailable }, auth: { signIn: unavailable, completeNewPassword: unavailable, clearPendingChallenge: () => undefined, restoreSession: async () => ({ outcome: "SignedOut" }), signOut: unavailable }, library: { listChildren: unavailable, createFolder: unavailable, trashFolder: unavailable, getUsage: unavailable, mountStatus: unavailable, mountStash: unavailable, unmountStash: unavailable }, stash: { selectSource: unavailable, confirm: unavailable, status: unavailable, cancel: unavailable, onNativeDrop: async () => () => undefined }, unavailable: (capability) => `${capabilityLabel(capability)} is available in the desktop app when its backend capability is implemented.` } as DesktopGateway;
+  return { kind: "unavailable", window: { act: unavailable, startDragging: unavailable }, auth: { signIn: unavailable, completeNewPassword: unavailable, clearPendingChallenge: () => undefined, restoreSession: async () => ({ outcome: "SignedOut" }), signOut: unavailable }, library: { listChildren: unavailable, createFolder: unavailable, trashFolder: unavailable, getUsage: unavailable, mountStatus: unavailable, mountStash: unavailable, unmountStash: unavailable, search: unavailable }, stash: { selectSource: unavailable, confirm: unavailable, status: unavailable, cancel: unavailable, onNativeDrop: async () => () => undefined }, unavailable: (capability) => `${capabilityLabel(capability)} is available in the desktop app when its backend capability is implemented.` } as DesktopGateway;
 }
 function capabilityLabel(capability: Parameters<DesktopGateway["unavailable"]>[0]): string { return { home: "Home summaries", search: "Search", "stash-it": "Stash It", "recent-stashes": "Recent Stashes", offline: "Offline files", transfers: "Transfers", settings: "Settings" }[capability]; }

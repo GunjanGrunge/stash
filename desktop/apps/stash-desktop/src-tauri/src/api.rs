@@ -54,7 +54,7 @@ fn safe_message(message: &str) -> bool {
     .any(|term| lower.contains(term))
 }
 
-async fn get_json(path: &str) -> Result<Value, String> {
+pub(crate) async fn get_json(path: &str) -> Result<Value, String> {
     let token = crate::auth::id_token()?;
     let response = Client::new()
         .get(format!("{}{path}", api_url()))

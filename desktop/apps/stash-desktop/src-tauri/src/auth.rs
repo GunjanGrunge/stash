@@ -363,7 +363,8 @@ pub async fn restore_session() -> Result<RestoreOutcome, String> {
 }
 
 #[tauri::command]
-pub fn sign_out() -> Result<(), String> {
+pub fn sign_out(search: tauri::State<'_, crate::search::SearchController>) -> Result<(), String> {
+    search.clear();
     *ID_TOKEN
         .get_or_init(|| Mutex::new(None))
         .lock()

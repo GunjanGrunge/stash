@@ -5,6 +5,7 @@
 mod api;
 mod auth;
 mod mount;
+mod search;
 mod upload;
 
 use tauri::{
@@ -112,6 +113,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(mount::MountController::with_uploads(uploads.clone()))
         .manage(uploads)
+        .manage(search::SearchController::default())
         .setup(|app| {
             build_tray(app)?;
             Ok(())
@@ -184,6 +186,7 @@ pub fn run() {
             api::get_usage,
             api::create_folder,
             api::trash_folder,
+            search::search_stash,
             mount::mount_status,
             mount::mount_stash,
             mount::unmount_stash,

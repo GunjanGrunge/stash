@@ -1,4 +1,5 @@
 //! Bounded segment cache. Transport validates ranges; this layer makes no self-hash claim.
+pub mod search;
 use std::{collections::BTreeMap, sync::Mutex, time::Duration};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

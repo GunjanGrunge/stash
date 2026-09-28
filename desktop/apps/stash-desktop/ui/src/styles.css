@@ -1313,6 +1313,43 @@ html, body, #root {
 
 .home-card-transfer { border-left: 3px solid var(--stash-cyan); }
 
+/* Search (on-device, PRD §6) */
+.search-bar { margin: 0 0 16px; }
+.search-bar input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-card);
+  color: var(--text);
+  font: 400 15px/1.4 Inter, system-ui, sans-serif;
+}
+.search-bar input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.search-examples .filter-tab-bar { flex-wrap: wrap; }
+.search-summary { color: var(--muted); font-size: 13px; margin: 0 0 8px; }
+.search-note {
+  color: var(--text);
+  background: var(--surface-hover);
+  border-left: 3px solid var(--stash-cyan);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+.search-folder { color: var(--muted); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.search-tag {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--text);
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .search-results th:nth-child(2), .search-results td:nth-child(2) { display: none; }
 /* --- Welcome and sign in (Figma node 6:4) --- */
 .welcome-layout {
   flex: 1;

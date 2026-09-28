@@ -6,6 +6,7 @@ import { FilesScreen, formatBytes } from "./FilesScreen";
 import { HomeScreen } from "./HomeScreen";
 import { NavigationRail, NAV_ITEMS } from "./NavigationRail";
 import { OfflineScreen } from "./OfflineScreen";
+import { SearchScreen } from "./SearchScreen";
 import { SettingsScreen } from "./SettingsScreen";
 import { StashItScreen } from "./StashItScreen";
 import { TransfersScreen } from "./TransfersScreen";
@@ -84,7 +85,7 @@ export function Shell({ gateway, username, onSignOut, signOutError = "" }: Props
   const openStash = useCallback(() => { setNotice(""); setDroppedSource(undefined); setStashOpen(true); }, []);
   const navigate = (item: NavItem) => {
     setActive(item);
-    const capability = item === "Search" ? "search" : item === "Favorites" ? "search" : item === "Recent Stashes" ? "recent-stashes" : undefined;
+    const capability = item === "Recent Stashes" ? "recent-stashes" : undefined;
     setNotice(capability ? gateway.unavailable(capability) : "");
   };
   const unavailable = (capability: Parameters<DesktopGateway["unavailable"]>[0]) => setNotice(gateway.unavailable(capability) || `${capability} is planned for a later STASH capability. Offline view is not available in this build yet`);
@@ -107,7 +108,9 @@ export function Shell({ gateway, username, onSignOut, signOutError = "" }: Props
     );
   } else if (active === "Files") {
     mainContent = <FilesScreen gateway={gateway} onUsage={(data) => setUsage({ status: "ready", data })} onMount={(data) => setMount({ status: "ready", data })} onStash={openStash} />;
-  } else if (active === "Search" || active === "Favorites" || active === "Recent Stashes") {
+  } else if (active === "Search") {
+    mainContent = <SearchScreen gateway={gateway} />;
+  } else if (active === "Favorites" || active === "Recent Stashes") {
     const title = active === "Recent Stashes" ? "Recent Stashes" : active;
     mainContent = <UnavailableScreen title={title} message={`${title} is not connected in this build yet. STASH will not invent or reuse another view for this destination.`} notice={notice} />;
   } else if (active === "Transfers") {

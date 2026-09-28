@@ -1,4 +1,4 @@
-import type { AuthOutcome, ChildItem, MountStatus, NativeDropNotice, RestoreOutcome, SourceSummary, TransferStatus, Usage } from "../domain/types";
+import type { AuthOutcome, ChildItem, MountStatus, NativeDropNotice, RestoreOutcome, SearchResponse, SourceSummary, TransferStatus, Usage } from "../domain/types";
 
 export type WindowAction = "minimize" | "toggle-maximize" | "close";
 
@@ -20,6 +20,8 @@ export type DesktopGateway = {
     mountStatus(): Promise<MountStatus>;
     mountStash(): Promise<MountStatus>;
     unmountStash(): Promise<MountStatus>;
+    /** Searches this device's index of the user's STASH; `refresh` re-reads the file list first. */
+    search(query: string, refresh?: boolean): Promise<SearchResponse>;
   };
   stash: {
     selectSource(kind: "file" | "folder"): Promise<SourceSummary>;
