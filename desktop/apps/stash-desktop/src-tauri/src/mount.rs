@@ -2,21 +2,21 @@
 //! its lifecycle state. Detaching only clears attachment state — it never
 //! deletes cloud objects or cache files.
 //!
-//! Scope for this first live mount: a flat listing of the caller's
-//! committed root-level files (no subdirectories yet), read on demand via
-//! the same range-verified `stash-core` cache and `stash-s3-provider` HTTP
-//! range provider already proven in `mount-spike`. The only new piece here
-//! is `ApiLeaseSource`, which fetches/renews each file's short-lived
-//! download URL from the real, deployed STASH API instead of a local
-//! fixture server.
+//! The drive shows the caller's whole folder tree. `ApiLibrary` lists each
+//! folder over the authenticated STASH API when Windows asks for it (the
+//! adapter re-lists after a few seconds, so new Stashes appear without a
+//! remount) and reads committed files through the range-verified
+//! `stash-core` cache and `stash-s3-provider` HTTP range provider, using
+//! short-lived download leases from `ApiLeaseSource`.
 
 use reqwest::blocking::Client as BlockingClient;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use stash_core::ReadError;
 use stash_s3_provider::{HttpRangeProvider, LeaseSource};
-use stash_windows_fs::{StashFile, StashFileSystemContext, WriteSink, WriteSpool};
+use stash_windows_fs::{DriveOptions, Library, Listing, StashFileSystemContext, WriteSink, WriteSpool};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::Win32::System::LibraryLoader::{LoadLibraryW, SetDllDirectoryW};
 use winfsp::host::{FileSystemHost, FileSystemParams, FineGuard, VolumeParams};
 
@@ -31,8 +31,104 @@ const WINFSP_DLL: &str = "winfsp-x86.dll";
 #[cfg(target_arch = "aarch64")]
 const WINFSP_DLL: &str = "winfsp-a64.dll";
 
-type LiveHost =
-    FileSystemHost<StashFileSystemContext<HttpRangeProvider<ApiLeaseSource>>, FineGuard>;
+/// Explorer's free-space figure is refreshed at most this often.
+const USAGE_TTL: Duration = Duration::from_secs(30);
+const LIST_TIMEOUT: Duration = Duration::from_secs(15);
+
+type LiveHost = FileSystemHost<StashFileSystemContext<ApiLibrary>, FineGuard>;
+
+/// The signed-in user's STASH as the drive sees it. Blocking HTTP on
+/// purpose: WinFSP calls these from its own dispatcher threads, never from
+/// inside the async Tauri runtime.
+pub struct ApiLibrary {
+    client: BlockingClient,
+    usage: Mutex<Option<(Instant, u64)>>,
+}
+
+impl ApiLibrary {
+    fn new() -> Self {
+        Self {
+            client: BlockingClient::builder()
+                .timeout(LIST_TIMEOUT)
+                .build()
+                .unwrap_or_else(|_| BlockingClient::new()),
+            usage: Mutex::new(None),
+        }
+    }
+
+    fn get(&self, path: &str) -> Result<Value, ReadError> {
+        let token = crate::auth::id_token().map_err(|_| ReadError::LeaseExpired)?;
+        let response = self
+            .client
+            .get(format!("{}{path}", crate::api::api_url()))
+            .bearer_auth(token)
+            .send()
+            .map_err(|_| ReadError::Offline)?;
+        match response.status().as_u16() {
+            200..=299 => response.json::<Value>().map_err(|_| ReadError::Io),
+            401 | 403 => Err(ReadError::LeaseExpired),
+            _ => Err(ReadError::Io),
+        }
+    }
+}
+
+fn safe_folder_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+}
+
+/// The drive's view of one `GET /folders/{id}/children` body: active
+/// folders and committed files only. Uploading, failed and trashed files
+/// have no readable bytes, so they never appear on the drive.
+fn listing_from(body: &Value) -> Vec<Listing> {
+    let Some(items) = body.get("items").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let text = |key: &str| item.get(key).and_then(Value::as_str).map(str::to_string);
+            let name = text("name")?;
+            match text("entity").as_deref() {
+                Some("FOLDER") if matches!(text("state").as_deref(), None | Some("active")) => {
+                    Some(Listing::Folder { id: text("folderId").filter(|id| safe_folder_id(id))?, name })
+                }
+                Some("FILE") if text("state").as_deref() == Some("committed") => Some(Listing::File {
+                    id: text("fileId").filter(|id| safe_folder_id(id))?,
+                    name,
+                    size: item.get("sizeBytes").and_then(Value::as_u64).unwrap_or(0),
+                }),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+impl Library for ApiLibrary {
+    type Provider = HttpRangeProvider<ApiLeaseSource>;
+
+    fn list(&self, folder_id: Option<&str>) -> Result<Vec<Listing>, ReadError> {
+        let id = folder_id.unwrap_or("ROOT");
+        if !safe_folder_id(id) {
+            return Err(ReadError::Io);
+        }
+        Ok(listing_from(&self.get(&format!("/folders/{id}/children"))?))
+    }
+
+    fn open_file(&self, file_id: &str) -> Self::Provider {
+        HttpRangeProvider::new(ApiLeaseSource { file_id: file_id.to_string() })
+    }
+
+    fn used_bytes(&self) -> Option<u64> {
+        if let Some((at, used)) = *self.usage.lock().ok()? {
+            if at.elapsed() < USAGE_TTL {
+                return Some(used);
+            }
+        }
+        let used = self.get("/me/usage").ok()?.get("usedBytes")?.as_u64()?;
+        *self.usage.lock().ok()? = Some((Instant::now(), used));
+        Some(used)
+    }
+}
 
 #[derive(Clone)]
 struct MountWriteSink {
@@ -201,14 +297,27 @@ impl MountController {
             format!("STASH couldn't initialize the Windows drive service: {err:?}")
         })?;
 
-        // An account with no committed files is still a valid STASH: mount
-        // it as an empty, usable root directory. Explorer and creative apps
-        // can then use the same S: drive before the first file arrives.
-        let files = crate::api::list_root_files().await?;
-        let context = StashFileSystemContext::new_with_write_sink(
-            mount_entries(files),
-            self.write_sink.clone(),
-        );
+        // Confirm the signed-in session can list the top level before a
+        // drive letter appears. An empty STASH is still a valid, usable drive.
+        let library = tauri::async_runtime::spawn_blocking(|| {
+            let library = ApiLibrary::new();
+            library.list(None).map(|_| library)
+        })
+        .await
+        .map_err(|_| "Mounting STASH was interrupted.".to_string())?
+        .map_err(|error| match error {
+            ReadError::LeaseExpired => "Your sign-in has expired. Please sign in again.".to_string(),
+            ReadError::Offline | ReadError::Timeout => {
+                "STASH could not be reached. Check your connection and try again.".to_string()
+            }
+            _ => "STASH couldn't read your folders to mount the drive.".to_string(),
+        })?;
+        let options = DriveOptions {
+            segment_size: SEGMENT_SIZE,
+            read_timeout: READ_TIMEOUT,
+            ..DriveOptions::default()
+        };
+        let context = StashFileSystemContext::new_with_write_sink(library, options, self.write_sink.clone());
 
         // WinFSP's host/mount/dispatcher calls are blocking FFI, not async —
         // run them off the Tauri async runtime's own worker threads.
@@ -255,28 +364,6 @@ impl MountController {
     }
 }
 
-/// Translates committed API rows into the read-only entries exposed by the
-/// current mount. An empty committed listing deliberately yields an empty
-/// directory rather than rejecting the mount.
-fn mount_entries(
-    files: Vec<crate::api::ChildItem>,
-) -> Vec<StashFile<HttpRangeProvider<ApiLeaseSource>>> {
-    let mut entries = Vec::with_capacity(files.len());
-    for file in files {
-        let Some(file_id) = file.file_id else {
-            continue;
-        };
-        let provider = HttpRangeProvider::new(ApiLeaseSource { file_id });
-        entries.push(StashFile::new(
-            &file.name,
-            file.size_bytes.unwrap_or(0),
-            SEGMENT_SIZE,
-            READ_TIMEOUT,
-            provider,
-        ));
-    }
-    entries
-}
 
 #[tauri::command]
 pub async fn mount_status(state: tauri::State<'_, MountController>) -> Result<MountStatus, String> {
@@ -328,9 +415,36 @@ mod tests {
     }
 
     #[test]
-    fn empty_committed_listing_creates_an_empty_mount_root() {
-        // Regression: an empty STASH is a valid, mountable drive. The live
-        // WinFSP host receives this empty entry table instead of an error.
-        assert!(mount_entries(Vec::new()).is_empty());
+    fn empty_listing_is_an_empty_but_valid_folder() {
+        assert!(listing_from(&serde_json::json!({ "items": [] })).is_empty());
+        assert!(listing_from(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn drive_lists_folders_and_committed_files_only() {
+        let body = serde_json::json!({ "items": [
+            { "entity": "FOLDER", "folderId": "f1", "name": "KSHMR Vol 5", "state": "active" },
+            { "entity": "FOLDER", "folderId": "f2", "name": "Legacy" },
+            { "entity": "FOLDER", "folderId": "f3", "name": "Old", "state": "trashed" },
+            { "entity": "FILE", "fileId": "a", "name": "Kick.wav", "state": "committed", "sizeBytes": 10 },
+            { "entity": "FILE", "fileId": "b", "name": "Half.wav", "state": "uploading", "sizeBytes": 10 },
+            { "entity": "FILE", "fileId": "../x", "name": "Bad.wav", "state": "committed" }
+        ]});
+        assert_eq!(
+            listing_from(&body),
+            vec![
+                Listing::Folder { id: "f1".into(), name: "KSHMR Vol 5".into() },
+                Listing::Folder { id: "f2".into(), name: "Legacy".into() },
+                Listing::File { id: "a".into(), name: "Kick.wav".into(), size: 10 },
+            ]
+        );
+    }
+
+    #[test]
+    fn unsafe_folder_ids_are_never_requested() {
+        assert!(safe_folder_id("ROOT"));
+        assert!(safe_folder_id("0f8c-4b2a_x"));
+        assert!(!safe_folder_id("../me/usage"));
+        assert!(!safe_folder_id(""));
     }
 }
