@@ -75,7 +75,7 @@ export class StashRetentionStack extends cdk.Stack {
       functionName: FUNCTION_NAME,
       entry: path.join(repositoryRoot(), "services", "entrypoints", "src", "purge-trash.ts"),
       handler: "handler",
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
       timeout: cdk.Duration.minutes(5),
       memorySize: 512,
@@ -84,7 +84,7 @@ export class StashRetentionStack extends cdk.Stack {
       environment: { STASH_TABLE_NAME: table.tableName, STASH_BUCKET_NAME: bucket.bucketName },
       bundling: {
         format: nodejs.OutputFormat.ESM,
-        target: "node20",
+        target: "node24",
         sourceMap: true,
         externalModules: ["@aws-sdk/*", "@smithy/*"],
         banner: "import{createRequire}from'module';const require=createRequire(import.meta.url);",

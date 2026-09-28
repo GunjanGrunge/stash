@@ -182,7 +182,7 @@ describe("StashApiStack handlers", () => {
 
   it("runs every function on Node 20", () => {
     for (const fn of functions()) {
-      expect(fn.Runtime).toBe("nodejs20.x");
+      expect(fn.Runtime).toBe("nodejs24.x");
     }
   });
 

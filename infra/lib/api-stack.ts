@@ -308,7 +308,7 @@ export class StashApiStack extends cdk.Stack {
         functionName: `${FUNCTION_NAME_PREFIX}${route.name}`,
         entry: path.join(root, ENTRYPOINT_DIR, `${route.name}.ts`),
         handler: "handler",
-        runtime: lambda.Runtime.NODEJS_20_X,
+        runtime: lambda.Runtime.NODEJS_24_X,
         architecture: lambda.Architecture.ARM_64,
         timeout: route.timeout,
         memorySize: route.memoryMb,
@@ -320,7 +320,7 @@ export class StashApiStack extends cdk.Stack {
         },
         bundling: {
           format: nodejs.OutputFormat.ESM,
-          target: "node20",
+          target: "node24",
           sourceMap: true,
           externalModules: ["@aws-sdk/*", "@smithy/*"],
           banner:
