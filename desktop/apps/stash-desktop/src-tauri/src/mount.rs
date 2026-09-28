@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use stash_core::ReadError;
 use stash_s3_provider::{HttpRangeProvider, LeaseSource};
-use stash_windows_fs::{DriveOptions, Library, Listing, StashFileSystemContext, WriteSink, WriteSpool};
+use stash_windows_fs::{DriveOptions, Library, Listing, StashFileSystemContext, TrashTarget, WriteSink, WriteSpool};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows::Win32::System::LibraryLoader::{LoadLibraryW, SetDllDirectoryW};
@@ -127,6 +127,32 @@ impl Library for ApiLibrary {
         let used = self.get("/me/usage").ok()?.get("usedBytes")?.as_u64()?;
         *self.usage.lock().ok()? = Some((Instant::now(), used));
         Some(used)
+    }
+
+    fn trash(&self, target: TrashTarget<'_>) -> Result<(), ReadError> {
+        let path = trash_path(target).ok_or(ReadError::Io)?;
+        let token = crate::auth::id_token().map_err(|_| ReadError::LeaseExpired)?;
+        let response = self
+            .client
+            .delete(format!("{}{path}", crate::api::api_url()))
+            .bearer_auth(token)
+            .send()
+            .map_err(|_| ReadError::Offline)?;
+        match response.status().as_u16() {
+            200..=299 => Ok(()),
+            401 | 403 => Err(ReadError::LeaseExpired),
+            _ => Err(ReadError::Io),
+        }
+    }
+}
+
+/// The existing move-to-Trash route for a delete on S:. Ids are validated so
+/// a crafted name can never become a different API path.
+fn trash_path(target: TrashTarget<'_>) -> Option<String> {
+    match target {
+        TrashTarget::File(id) if safe_folder_id(id) => Some(format!("/files/{id}")),
+        TrashTarget::Folder(id) if safe_folder_id(id) => Some(format!("/folders/{id}")),
+        _ => None,
     }
 }
 
@@ -438,6 +464,13 @@ mod tests {
                 Listing::File { id: "a".into(), name: "Kick.wav".into(), size: 10 },
             ]
         );
+    }
+
+    #[test]
+    fn deletes_on_s_use_the_move_to_trash_routes() {
+        assert_eq!(trash_path(TrashTarget::File("abc-1")).as_deref(), Some("/files/abc-1"));
+        assert_eq!(trash_path(TrashTarget::Folder("f_2")).as_deref(), Some("/folders/f_2"));
+        assert_eq!(trash_path(TrashTarget::File("../me/usage")), None);
     }
 
     #[test]
