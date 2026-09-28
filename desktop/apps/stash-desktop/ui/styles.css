@@ -25,6 +25,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 body {
   margin: 0;
@@ -100,6 +101,9 @@ h1 { max-width: 12ch; margin: 0; font-family: "Space Grotesk", Inter, "Segoe UI"
 .field { display: flex; flex-direction: column; gap: .4rem; font-size: .9375rem; color: var(--text); }
 .field input { min-height: 2.75rem; padding: 0 .85rem; border: 1px solid var(--border); border-radius: .5rem; background: var(--surface); color: var(--text); font: 1rem/1 Inter, "Segoe UI", system-ui, sans-serif; }
 .field input:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
+.remember-choice { display: inline-flex; align-items: center; width: fit-content; gap: .65rem; color: var(--text); font-size: .9375rem; line-height: 1.35; cursor: pointer; }
+.remember-choice input { width: 1.15rem; height: 1.15rem; margin: 0; accent-color: var(--stash-violet); }
+.remember-choice:focus-within { outline: 3px solid var(--focus); outline-offset: .3rem; border-radius: .25rem; }
 
 .browser-screen { width: min(1100px, 100%); min-height: calc(100vh - 90px); display: grid; grid-template-columns: 220px 1fr; overflow: hidden; border: 1px solid var(--border); border-radius: 1rem; background: var(--surface-card); box-shadow: 0 1rem 3rem rgb(11 20 36 / 12%); }
 .browser-sidebar { display: flex; flex-direction: column; gap: 1rem; padding: 1.25rem; border-right: 1px solid var(--border); }
@@ -109,6 +113,7 @@ h1 { max-width: 12ch; margin: 0; font-family: "Space Grotesk", Inter, "Segoe UI"
 .mount-card { margin-top: auto; padding-top: 1rem; border-top: 1px solid var(--border); }
 .mount-card p { margin: .3rem 0 .75rem; }
 .mount-card .button { width: 100%; font-size: .875rem; }
+.mount-card .signout-description { margin: .65rem 0 0; color: var(--muted); font-size: .8rem; line-height: 1.4; }
 .browser-content { min-width: 0; padding: 1.5rem; }
 .browser-toolbar { display: flex; align-items: end; justify-content: space-between; gap: 1rem; }
 .browser-toolbar h1 { max-width: none; font-size: clamp(1.8rem, 3vw, 2.7rem); }
@@ -140,3 +145,7 @@ h1 { max-width: 12ch; margin: 0; font-family: "Space Grotesk", Inter, "Segoe UI"
   .welcome-card { padding: 1.5rem; }
   h1 { font-size: clamp(2rem, 10vw, 2.5rem); }
 }
+.stash-dropzone-card.is-drag-over, .stash-dropzone.is-drag-over { border-color: var(--stash-accent, #38bdf8); box-shadow: 0 0 0 3px color-mix(in srgb, #38bdf8 22%, transparent); }
+.rail-notice { margin: 0 16px 12px; padding: 9px 10px; border: 1px solid color-mix(in srgb, #38bdf8 35%, transparent); border-radius: 8px; color: var(--stash-ink, #dbeafe); font-size: 12px; line-height: 1.4; }
+.mount-refresh, .storage-refresh { margin-top: 8px; font-size: 11px; }
+.unavailable-panel { max-width: 720px; margin: 48px auto; }

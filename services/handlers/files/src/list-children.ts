@@ -35,7 +35,7 @@ export function listChildren(deps: { repo: Repository }) {
       // caller's OWN empty folder still returns 200 with an empty list.
       if (parentFolderId !== null) {
         const folder = await deps.repo.findFolderById(userId, parentFolderId);
-        if (folder === undefined) throw notFound("folder");
+        if (folder === undefined || folder.state === "trashed" || folder.state === "purging") throw notFound("folder");
       }
       const items = await deps.repo.listChildren(userId, parentFolderId);
       const sorted = [...items].sort(byName);

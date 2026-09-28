@@ -62,9 +62,18 @@ export function cancelStash(deps: { repo: StashRepository }) {
       // below is, because this read can be stale by the time the write lands.
       if (stash.state !== "open") throw conflict("stash is not open");
 
-      const releaseBytes = Math.max(0, stash.reservedBytes - stash.committedBytes);
-
       const files = await deps.repo.listStashFiles(userId, stashId);
+      // File aborts may already have returned part of the reservation. The
+      // Stash projection carries the same once-only marker used by the upload
+      // repository so abort-then-cancel cannot refund those bytes again.
+      const alreadyReleasedBytes = files
+        .filter((file) => file.state !== "committed" && file.quotaReleased === true)
+        .reduce((sum, file) => sum + file.sizeBytes, 0);
+      const releaseBytes = Math.max(
+        0,
+        stash.reservedBytes - stash.committedBytes - alreadyReleasedBytes,
+      );
+
       const pending = files.filter((f) => f.state === "pending").map((f) => f.fileId);
       if (pending.length > 0) {
         await deps.repo.deleteFiles(userId, pending);

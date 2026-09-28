@@ -52,7 +52,7 @@ export class StashRetentionStack extends cdk.Stack {
     });
     this.role.addToPolicy(new iam.PolicyStatement({
       actions: ["dynamodb:Query", "dynamodb:UpdateItem", "dynamodb:TransactWriteItems"],
-      resources: [table.tableArn, `${table.tableArn}/index/gsi5`],
+      resources: [table.tableArn, `${table.tableArn}/index/gsi1`, `${table.tableArn}/index/gsi5`],
     }));
     this.role.addToPolicy(new iam.PolicyStatement({
       actions: ["s3:DeleteObject"],
@@ -70,10 +70,12 @@ export class StashRetentionStack extends cdk.Stack {
     }));
 
     this.purgeFunction = new nodejs.NodejsFunction(this, "PurgeTrash", {
+      projectRoot: repositoryRoot(),
+      depsLockFilePath: path.join(repositoryRoot(), "package-lock.json"),
       functionName: FUNCTION_NAME,
       entry: path.join(repositoryRoot(), "services", "entrypoints", "src", "purge-trash.ts"),
       handler: "handler",
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
       timeout: cdk.Duration.minutes(5),
       memorySize: 512,
@@ -82,7 +84,7 @@ export class StashRetentionStack extends cdk.Stack {
       environment: { STASH_TABLE_NAME: table.tableName, STASH_BUCKET_NAME: bucket.bucketName },
       bundling: {
         format: nodejs.OutputFormat.ESM,
-        target: "node20",
+        target: "node24",
         sourceMap: true,
         externalModules: ["@aws-sdk/*", "@smithy/*"],
         banner: "import{createRequire}from'module';const require=createRequire(import.meta.url);",

@@ -8,6 +8,8 @@ test("post-sign-in screen has accessible browse, breadcrumb, usage, and mount su
   const html = await read("../ui/index.html");
   for (const marker of ["browser-screen", "file-list", "breadcrumb", "usage", "selection-details", "mount-status", "mount-action"]) assert.match(html, new RegExp(marker));
   assert.match(html, /aria-label="Breadcrumb"/);
+  assert.match(html, /signout-action/);
+  assert.match(html, /Sign out removes remembered sign-in from this device\./);
 });
 
 test("browser renders explicit hierarchy labels and required states", async () => {
@@ -21,9 +23,11 @@ test("browser renders explicit hierarchy labels and required states", async () =
 
 test("sign-in transition hides the pre-auth cards before showing the browser", async () => {
   const source = await read("../ui/post-signin.js");
+  const styles = await read("../ui/styles.css");
   assert.match(source, /querySelectorAll\("\.welcome-card"\)/);
   assert.match(source, /card\.hidden\s*=\s*true/);
   assert.match(source, /screen\.hidden\s*=\s*false/);
+  assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important/);
 });
 
 test("mount presentation includes the selected drive letter and persistent status", async () => {
@@ -33,6 +37,8 @@ test("mount presentation includes the selected drive letter and persistent statu
   assert.match(source, /mount_stash/);
   assert.match(source, /unmount_stash/);
   assert.match(source, /files and cache were kept/);
+  assert.match(source, /safeActionError/);
+  assert.match(source, /error\?\.message/);
 });
 
 test("the browser keeps secrets and payload bytes outside the webview", async () => {
@@ -40,4 +46,14 @@ test("the browser keeps secrets and payload bytes outside the webview", async ()
   assert.doesNotMatch(source, /fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon/i);
   assert.doesNotMatch(source, /objectKey|presigned|token|payload|amazonaws|Cognito/i);
   assert.match(source, /__TAURI__.*invoke|invoke\(/s);
+  assert.match(source, /invoke\("sign_out"\)/);
+  assert.match(source, /safeActionError\(error, "We couldn't sign you out\. Try again\."\)/);
+});
+
+test("post-sign-in contract is represented by the generated React entry Tauri consumes", async () => {
+  const config = JSON.parse(await read("../src-tauri/tauri.conf.json"));
+  const generated = await read("../ui/dist/index.html");
+  assert.equal(config.build.frontendDist, "../ui/dist");
+  assert.match(generated, /<div id="root"><\/div>/);
+  assert.doesNotMatch(generated, /welcome\.js|post-signin\.js/);
 });

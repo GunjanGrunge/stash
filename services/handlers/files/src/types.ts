@@ -21,8 +21,17 @@ export interface FolderRecord {
   parentFolderId: string | null;
   /** The folder's own full path prefix, byte-identical to the input slice. */
   relativePath: string;
-  gsi1pk: string;
-  gsi1sk: string;
+  /** Absent on existing records; treated as active for backward compatibility. */
+  state?: "active" | "trashed" | "purging";
+  deletedAt?: string;
+  purgeAfter?: string;
+  /** Sparse while the folder root is recoverable in Trash or purging. */
+  gsi1pk?: string;
+  gsi1sk?: string;
+  gsi4pk?: string;
+  gsi4sk?: string;
+  gsi5pk?: string;
+  gsi5sk?: string;
 }
 
 export interface FileRecord {

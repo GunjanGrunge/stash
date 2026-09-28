@@ -22,16 +22,34 @@
 //! gated live-mount check (`desktop/tests/mount-spike/`).
 use stash_core::{Cache, RangeProvider, ReadError};
 use std::ffi::c_void;
+use std::fs::{File, OpenOptions};
+use std::io::{Seek, SeekFrom, Write};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{
     STATUS_ACCESS_DENIED, STATUS_INVALID_DEVICE_REQUEST, STATUS_IO_DEVICE_ERROR,
-    STATUS_MEDIA_WRITE_PROTECTED, STATUS_NETWORK_UNREACHABLE, STATUS_OBJECT_NAME_NOT_FOUND,
+    STATUS_MEDIA_WRITE_PROTECTED, STATUS_NETWORK_UNREACHABLE, STATUS_OBJECT_NAME_COLLISION,
+    STATUS_OBJECT_NAME_NOT_FOUND,
 };
-use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY};
+use windows::Win32::Storage::FileSystem::{
+    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_READONLY,
+};
 use winfsp::filesystem::{
     DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, OpenFileInfo, VolumeInfo,
     WideNameInfo,
 };
 use winfsp::{FspError, Result as FspResult, U16CStr, U16CString};
+
+#[cfg(debug_assertions)]
+fn debug_mount_trace(event: &str) {
+    let path = std::env::temp_dir().join("stash-mount-debug.log");
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{event}");
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn debug_mount_trace(_event: &str) {}
 
 /// One read-only file exposed at the mount root.
 pub struct StashFile<P: RangeProvider> {
@@ -58,10 +76,220 @@ impl<P: RangeProvider> StashFile<P> {
     }
 }
 
-/// An open handle: either the mount root (directory) or one root-level file.
+/// A native sink receives a completed spool. The filesystem crate does not
+/// know about Tauri, HTTP, credentials, or the STASH API.
+pub trait WriteSink: Send + Sync {
+    fn begin(&self, name: &[u16]) -> Result<WriteSpool, String>;
+    fn submit(&self, spool: WriteSpool) -> Result<(), String>;
+}
+
+/// A bounded, file-backed write session. The file is always created below the
+/// OS temp directory and is removed on drop unless ownership is detached by a
+/// sink that has safely scheduled its upload.
+pub struct WriteSpool {
+    name: Vec<u16>,
+    path: PathBuf,
+    file: Option<File>,
+    remove_on_drop: bool,
+}
+
+impl WriteSpool {
+    pub fn create_for_mount(name: &[u16]) -> Result<Self, String> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let directory = std::env::temp_dir().join("stash-mount-spool");
+        std::fs::create_dir_all(&directory)
+            .map_err(|_| "STASH could not prepare its temporary write spool.".to_string())?;
+        let path = directory.join(format!(
+            "write-{}-{}.spool",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(|_| "STASH could not create its temporary write spool.".to_string())?;
+        Ok(Self {
+            name: name.to_vec(),
+            path,
+            file: Some(file),
+            remove_on_drop: true,
+        })
+    }
+
+    pub fn name(&self) -> &[u16] {
+        &self.name
+    }
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    fn write_at(&mut self, buffer: &[u8], offset: u64, write_to_eof: bool) -> Result<u32, String> {
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| "STASH write handle is closed.".to_string())?;
+        if write_to_eof {
+            file.seek(SeekFrom::End(0))
+        } else {
+            file.seek(SeekFrom::Start(offset))
+        }
+        .map_err(|_| "STASH could not seek its temporary write spool.".to_string())?;
+        file.write_all(buffer)
+            .map_err(|_| "STASH could not write its temporary write spool.".to_string())?;
+        Ok(buffer.len() as u32)
+    }
+
+    fn prepare(&mut self) -> Result<(), String> {
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| "STASH write handle is closed.".to_string())?;
+        file.flush()
+            .map_err(|_| "STASH could not flush its temporary write spool.".to_string())?;
+        file.sync_all()
+            .map_err(|_| "STASH could not finalize its temporary write spool.".to_string())?;
+        self.file.take();
+        Ok(())
+    }
+
+    fn set_len(&mut self, length: u64) -> Result<(), String> {
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| "STASH write handle is closed.".to_string())?;
+        file.set_len(length)
+            .map_err(|_| "STASH could not resize its temporary write spool.".to_string())
+    }
+
+    fn flush(&mut self) -> Result<(), String> {
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| "STASH write handle is closed.".to_string())?;
+        file.flush()
+            .map_err(|_| "STASH could not flush its temporary write spool.".to_string())
+    }
+
+    pub fn detach_path(mut self) -> PathBuf {
+        self.file.take();
+        self.remove_on_drop = false;
+        self.path.clone()
+    }
+}
+
+impl Drop for WriteSpool {
+    fn drop(&mut self) {
+        let _ = self.file.take();
+        if self.remove_on_drop {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+struct RejectWriteSink;
+impl WriteSink for RejectWriteSink {
+    fn begin(&self, _name: &[u16]) -> Result<WriteSpool, String> {
+        Err("STASH mount writes are not configured for this filesystem.".to_string())
+    }
+    fn submit(&self, _spool: WriteSpool) -> Result<(), String> {
+        Err("STASH mount writes are not configured for this filesystem.".to_string())
+    }
+}
+
+/// An open handle: root, a committed read-only file, or one new root-level file.
 pub enum Handle {
     Root,
     File(usize),
+    Pending(Arc<Mutex<PendingWrite>>),
+}
+
+pub struct PendingWrite {
+    spool: Option<WriteSpool>,
+    reserved_name: Option<Vec<u16>>,
+    submitted: bool,
+    failure: Option<String>,
+    size: u64,
+}
+
+impl PendingWrite {
+    fn write_at(
+        &mut self,
+        buffer: &[u8],
+        offset: u64,
+        write_to_eof: bool,
+    ) -> Result<u32, String> {
+        let result = self
+            .spool
+            .as_mut()
+            .ok_or_else(|| "STASH write handle is closed.".to_string())
+            .and_then(|spool| spool.write_at(buffer, offset, write_to_eof));
+        match result {
+            Ok(written) => {
+                let end = if write_to_eof {
+                    self.size.saturating_add(written as u64)
+                } else {
+                    offset.saturating_add(written as u64)
+                };
+                self.size = self.size.max(end);
+                Ok(written)
+            }
+            Err(error) => {
+                // A failed native write is terminal for this handle. Cleanup
+                // may still run later, but it must only drop the partial spool.
+                self.failure = Some(error.clone());
+                Err(error)
+            }
+        }
+    }
+
+    fn finalize(
+        &mut self,
+        sink: &dyn WriteSink,
+        pending_names: &Mutex<std::collections::HashSet<Vec<u16>>>,
+    ) {
+        if self.submitted {
+            return;
+        }
+        self.submitted = true;
+
+        if self.failure.is_none() {
+            if let Some(mut spool) = self.spool.take() {
+                if let Err(error) = spool.prepare().and_then(|_| sink.submit(spool)) {
+                    self.failure = Some(error);
+                }
+            }
+        } else {
+            // Dropping the spool removes the partial file; never hand failed
+            // bytes to the native upload boundary.
+            let _ = self.spool.take();
+        }
+
+        if let Some(name) = self.reserved_name.take() {
+            pending_names
+                .lock()
+                .expect("pending names lock poisoned")
+                .remove(&name);
+        }
+    }
+
+    fn set_size(&mut self, size: u64) -> Result<(), String> {
+        let spool = self
+            .spool
+            .as_mut()
+            .ok_or_else(|| "STASH write handle is closed.".to_string())?;
+        spool.set_len(size)?;
+        self.size = size;
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), String> {
+        self.spool
+            .as_mut()
+            .ok_or_else(|| "STASH write handle is closed.".to_string())?
+            .flush()
+    }
 }
 
 /// What resolving a path against the root entry table found. Plain enum —
@@ -85,34 +313,79 @@ fn read_error_to_fsp(err: ReadError) -> FspError {
     FspError::NTSTATUS(status.0)
 }
 
-/// Strips the mount's leading `\`. Returns `None` for the root itself.
-fn path_after_root(file_name: &U16CStr) -> Option<Vec<u16>> {
+/// Returns one safe root-level UTF-16 filename, preserving the original code
+/// units. Any separator, dot component, drive syntax, control character, or
+/// empty name is rejected; nested paths never reach the native sink.
+fn root_name(file_name: &U16CStr) -> Option<Vec<u16>> {
     const BACKSLASH: u16 = b'\\' as u16;
-    let slice = file_name.as_slice();
-    match slice {
-        [] | [BACKSLASH] => None,
-        [BACKSLASH, rest @ ..] => Some(rest.to_vec()),
-        other => Some(other.to_vec()),
+    const SLASH: u16 = b'/' as u16;
+    let name = match file_name.as_slice() {
+        [] | [BACKSLASH] => return None,
+        [BACKSLASH, rest @ ..] => rest,
+        other => other,
+    };
+    if name.is_empty()
+        || name.iter().any(|unit| {
+            *unit == BACKSLASH || *unit == SLASH || *unit == b':' as u16 || *unit < 0x20
+        })
+    {
+        return Some(Vec::new());
     }
+    if name == [b'.' as u16] || name == [b'.' as u16, b'.' as u16] {
+        return Some(Vec::new());
+    }
+    Some(name.to_vec())
 }
 
-/// Read-only, flat-root filesystem context backed by `stash-core`.
+/// Writable only for newly-created root-level files; committed entries remain
+/// read-only and the injected sink owns the upload policy.
 pub struct StashFileSystemContext<P: RangeProvider> {
     entries: Vec<StashFile<P>>,
+    write_sink: Arc<dyn WriteSink>,
+    pending_names: Mutex<std::collections::HashSet<Vec<u16>>>,
 }
 
 impl<P: RangeProvider> StashFileSystemContext<P> {
-    pub fn new(mut entries: Vec<StashFile<P>>) -> Self {
+    pub fn new(entries: Vec<StashFile<P>>) -> Self {
+        Self::new_with_write_sink(entries, Arc::new(RejectWriteSink))
+    }
+
+    pub fn new_with_write_sink(
+        mut entries: Vec<StashFile<P>>,
+        write_sink: Arc<dyn WriteSink>,
+    ) -> Self {
         entries.sort_by(|a, b| a.name.as_slice().cmp(b.name.as_slice()));
-        Self { entries }
+        Self {
+            entries,
+            write_sink,
+            pending_names: Mutex::new(std::collections::HashSet::new()),
+        }
+    }
+
+    fn reserve_pending_name(&self, name: &[u16]) -> bool {
+        let mut pending_names = self
+            .pending_names
+            .lock()
+            .expect("pending names lock poisoned");
+        // The membership check and insertion share this one lock, so two
+        // synchronous WinFSP create callbacks cannot reserve the same name.
+        pending_names.insert(name.to_vec())
+    }
+
+    fn release_pending_name(&self, name: &[u16]) {
+        self.pending_names
+            .lock()
+            .expect("pending names lock poisoned")
+            .remove(name);
     }
 
     /// Pure path resolution: no WinFSP types in or out. This is the piece
     /// worth testing thoroughly — `open` and `get_security_by_name` are both
     /// thin wrappers around it.
     fn resolve(&self, file_name: &U16CStr) -> Resolved {
-        match path_after_root(file_name) {
+        match root_name(file_name) {
             None => Resolved::Root,
+            Some(name) if name.is_empty() => Resolved::NotFound,
             Some(name) => match self.entries.iter().position(|e| e.name.as_slice() == name) {
                 Some(index) => Resolved::File(index),
                 None => Resolved::NotFound,
@@ -211,7 +484,85 @@ impl<P: RangeProvider> FileSystemContext for StashFileSystemContext<P> {
         }
     }
 
-    fn close(&self, _context: Self::FileContext) {}
+    fn create(
+        &self,
+        file_name: &U16CStr,
+        create_options: u32,
+        _granted_access: u32,
+        file_attributes: u32,
+        _security_descriptor: Option<&[c_void]>,
+        _allocation_size: u64,
+        _extra_buffer: Option<&[u8]>,
+        _extra_buffer_is_reparse_point: bool,
+        file_info: &mut OpenFileInfo,
+    ) -> FspResult<Self::FileContext> {
+        const FILE_DIRECTORY_FILE: u32 = 0x0000_0001;
+        const FILE_ATTRIBUTE_DIRECTORY_VALUE: u32 = 0x10;
+        let Some(name) = root_name(file_name) else {
+            debug_mount_trace("create: rejected root");
+            return Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0));
+        };
+        if name.is_empty()
+            || create_options & FILE_DIRECTORY_FILE != 0
+            || file_attributes & FILE_ATTRIBUTE_DIRECTORY_VALUE != 0
+        {
+            debug_mount_trace("create: rejected directory or unsafe name");
+            return Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0));
+        }
+        if self
+            .entries
+            .iter()
+            .any(|entry| entry.name.as_slice() == name)
+        {
+            debug_mount_trace("create: rejected existing name");
+            return Err(FspError::NTSTATUS(STATUS_OBJECT_NAME_COLLISION.0));
+        }
+        if !self.reserve_pending_name(&name) {
+            debug_mount_trace("create: rejected pending collision");
+            return Err(FspError::NTSTATUS(STATUS_OBJECT_NAME_COLLISION.0));
+        }
+        let spool = match self.write_sink.begin(&name) {
+            Ok(spool) => spool,
+            Err(_) => {
+                // Reservation precedes sink creation so the check-and-reserve
+                // is atomic; a failed begin must roll it back immediately.
+                self.release_pending_name(&name);
+                debug_mount_trace("create: spool begin failed");
+                return Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0));
+            }
+        };
+        let pending = PendingWrite {
+            spool: Some(spool),
+            reserved_name: Some(name),
+            submitted: false,
+            failure: None,
+            size: 0,
+        };
+        let handle = Handle::Pending(Arc::new(Mutex::new(pending)));
+        debug_mount_trace("create: pending handle created");
+        let mut info = FileInfo::default();
+        info.file_attributes = FILE_ATTRIBUTE_NORMAL.0;
+        *file_info.as_mut() = info;
+        Ok(handle)
+    }
+
+    fn cleanup(&self, context: &Self::FileContext, _file_name: Option<&U16CStr>, _flags: u32) {
+        if let Handle::Pending(pending) = context {
+            debug_mount_trace("cleanup: pending handle");
+            if let Ok(mut pending) = pending.lock() {
+                pending.finalize(self.write_sink.as_ref(), &self.pending_names);
+            }
+        }
+    }
+
+    fn close(&self, context: Self::FileContext) {
+        if let Handle::Pending(pending) = &context {
+            debug_mount_trace("close: pending handle");
+            if let Ok(mut pending) = pending.lock() {
+                pending.finalize(self.write_sink.as_ref(), &self.pending_names);
+            }
+        }
+    }
 
     fn get_file_info(
         &self,
@@ -221,6 +572,13 @@ impl<P: RangeProvider> FileSystemContext for StashFileSystemContext<P> {
         *file_info = match context {
             Handle::Root => self.root_file_info(),
             Handle::File(index) => self.file_info_for(*index),
+            Handle::Pending(pending) => {
+                let mut info = FileInfo::default();
+                info.file_attributes = FILE_ATTRIBUTE_NORMAL.0;
+                info.file_size = pending.lock().expect("pending write lock poisoned").size;
+                info.allocation_size = info.file_size;
+                info
+            }
         };
         Ok(())
     }
@@ -228,21 +586,105 @@ impl<P: RangeProvider> FileSystemContext for StashFileSystemContext<P> {
     fn read(&self, context: &Self::FileContext, buffer: &mut [u8], offset: u64) -> FspResult<u32> {
         match context {
             Handle::File(index) => self.read_file(*index, buffer, offset),
+            Handle::Pending(_) => Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0)),
             Handle::Root => Err(FspError::NTSTATUS(STATUS_INVALID_DEVICE_REQUEST.0)),
         }
     }
 
     fn write(
         &self,
-        _context: &Self::FileContext,
-        _buffer: &[u8],
-        _offset: u64,
-        _write_to_eof: bool,
-        _constrained_io: bool,
-        _file_info: &mut FileInfo,
+        context: &Self::FileContext,
+        buffer: &[u8],
+        offset: u64,
+        write_to_eof: bool,
+        constrained_io: bool,
+        file_info: &mut FileInfo,
     ) -> FspResult<u32> {
-        // Read-only mount for this spike (spec: no upload/write path yet).
-        Err(FspError::NTSTATUS(STATUS_MEDIA_WRITE_PROTECTED.0))
+        let Handle::Pending(pending) = context else {
+            return Err(FspError::NTSTATUS(STATUS_MEDIA_WRITE_PROTECTED.0));
+        };
+        if constrained_io {
+            return Err(FspError::NTSTATUS(STATUS_INVALID_DEVICE_REQUEST.0));
+        }
+        let mut pending = pending
+            .lock()
+            .map_err(|_| FspError::NTSTATUS(STATUS_IO_DEVICE_ERROR.0))?;
+        let written = pending
+            .write_at(buffer, offset, write_to_eof)
+            .map_err(|_| FspError::NTSTATUS(STATUS_IO_DEVICE_ERROR.0))?;
+        debug_mount_trace("write: bytes accepted");
+        file_info.file_size = pending.size;
+        file_info.allocation_size = pending.size;
+        Ok(written)
+    }
+
+    fn overwrite(
+        &self,
+        _context: &Self::FileContext,
+        _file_attributes: u32,
+        _replace_file_attributes: bool,
+        _allocation_size: u64,
+        _extra_buffer: Option<&[u8]>,
+        _file_info: &mut FileInfo,
+    ) -> FspResult<()> {
+        Err(FspError::NTSTATUS(STATUS_OBJECT_NAME_COLLISION.0))
+    }
+
+    fn flush(&self, context: Option<&Self::FileContext>, file_info: &mut FileInfo) -> FspResult<()> {
+        let Some(Handle::Pending(pending)) = context else {
+            return Err(FspError::NTSTATUS(STATUS_INVALID_DEVICE_REQUEST.0));
+        };
+        let mut pending = pending
+            .lock()
+            .map_err(|_| FspError::NTSTATUS(STATUS_IO_DEVICE_ERROR.0))?;
+        pending
+            .flush()
+            .map_err(|_| FspError::NTSTATUS(STATUS_IO_DEVICE_ERROR.0))?;
+        file_info.file_attributes = FILE_ATTRIBUTE_NORMAL.0;
+        file_info.file_size = pending.size;
+        file_info.allocation_size = pending.size;
+        Ok(())
+    }
+
+    fn rename(
+        &self,
+        _context: &Self::FileContext,
+        _file_name: &U16CStr,
+        _new_file_name: &U16CStr,
+        _replace_if_exists: bool,
+    ) -> FspResult<()> {
+        Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0))
+    }
+
+    fn set_delete(
+        &self,
+        _context: &Self::FileContext,
+        _file_name: &U16CStr,
+        _delete_file: bool,
+    ) -> FspResult<()> {
+        Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0))
+    }
+
+    fn set_file_size(
+        &self,
+        context: &Self::FileContext,
+        new_size: u64,
+        _set_allocation_size: bool,
+        file_info: &mut FileInfo,
+    ) -> FspResult<()> {
+        let Handle::Pending(pending) = context else {
+            return Err(FspError::NTSTATUS(STATUS_MEDIA_WRITE_PROTECTED.0));
+        };
+        let mut pending = pending
+            .lock()
+            .map_err(|_| FspError::NTSTATUS(STATUS_IO_DEVICE_ERROR.0))?;
+        pending
+            .set_size(new_size)
+            .map_err(|_| FspError::NTSTATUS(STATUS_IO_DEVICE_ERROR.0))?;
+        file_info.file_attributes = FILE_ATTRIBUTE_NORMAL.0;
+        file_info.file_size = pending.size;
+        file_info.allocation_size = pending.size;
+        Ok(())
     }
 
     fn read_directory(
@@ -335,6 +777,13 @@ mod tests {
     }
 
     #[test]
+    fn empty_context_is_a_valid_empty_root_directory() {
+        let fs = StashFileSystemContext::<FixedProvider>::new(Vec::new());
+        assert!(matches!(fs.resolve(&path("\\")), Resolved::Root));
+        assert!(fs.entries_after(None).next().is_none());
+    }
+
+    #[test]
     fn resolves_known_file_by_name() {
         let fs = one_file_context();
         assert!(matches!(fs.resolve(&path("\\kick.wav")), Resolved::File(0)));
@@ -421,8 +870,181 @@ mod tests {
         assert_eq!(after_a, vec![1]);
     }
 
+    struct CountingSink {
+        submissions: AtomicUsize,
+    }
+
+    impl WriteSink for CountingSink {
+        fn begin(&self, name: &[u16]) -> Result<WriteSpool, String> {
+            WriteSpool::create_for_mount(name)
+        }
+        fn submit(&self, spool: WriteSpool) -> Result<(), String> {
+            self.submissions.fetch_add(1, Ordering::SeqCst);
+            let _ = std::fs::remove_file(spool.path());
+            Ok(())
+        }
+    }
+
+    struct FailingBeginSink;
+
+    impl WriteSink for FailingBeginSink {
+        fn begin(&self, _name: &[u16]) -> Result<WriteSpool, String> {
+            Err("begin failed".to_string())
+        }
+
+        fn submit(&self, _spool: WriteSpool) -> Result<(), String> {
+            panic!("a failed begin must never submit")
+        }
+    }
+
     #[test]
-    fn get_security_by_name_matches_open_resolution() {
+    fn failed_begin_rolls_back_the_pending_name_reservation() {
+        let fs: StashFileSystemContext<FixedProvider> = StashFileSystemContext::new_with_write_sink(
+            Vec::new(),
+            Arc::new(FailingBeginSink),
+        );
+        let name = path("retry.wav");
+        assert!(fs.write_sink.begin(name.as_slice()).is_err());
+        assert!(fs.reserve_pending_name(name.as_slice()));
+        fs.release_pending_name(name.as_slice());
+    }
+
+    #[test]
+    fn concurrent_same_name_reservation_allows_exactly_one_handle() {
+        let fs = Arc::new(one_file_context());
+        let name = path("concurrent.wav");
+        let results = std::thread::scope(|scope| {
+            (0..8)
+                .map(|_| {
+                    let fs = Arc::clone(&fs);
+                    let name = name.clone();
+                    scope.spawn(move || fs.reserve_pending_name(name.as_slice()))
+                })
+                .map(|thread| thread.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(results.iter().filter(|reserved| **reserved).count(), 1);
+        fs.release_pending_name(name.as_slice());
+    }
+
+    #[test]
+    fn failed_spool_write_is_not_submitted_and_name_can_be_reused() {
+        let sink = CountingSink {
+            submissions: AtomicUsize::new(0),
+        };
+        let name = path("failed-write.wav");
+        let fs = one_file_context();
+        assert!(fs.reserve_pending_name(name.as_slice()));
+        let spool = WriteSpool::create_for_mount(name.as_slice()).unwrap();
+        let mut pending = PendingWrite {
+            spool: Some(spool),
+            reserved_name: Some(name.as_slice().to_vec()),
+            submitted: false,
+            failure: None,
+            size: 0,
+        };
+        pending.spool.as_mut().unwrap().file.take();
+        assert!(pending.write_at(b"partial", 0, false).is_err());
+        pending.finalize(&sink, &fs.pending_names);
+        assert!(pending.failure.is_some());
+        assert_eq!(sink.submissions.load(Ordering::SeqCst), 0);
+        assert!(fs.reserve_pending_name(name.as_slice()));
+        fs.release_pending_name(name.as_slice());
+    }
+
+
+    #[test]
+    fn root_name_preserves_unicode_and_rejects_unsafe_paths() {
+        let unicode = path("Étage.wav");
+        assert_eq!(root_name(&unicode).unwrap(), unicode.as_slice());
+        assert!(root_name(&path("\\Beats\\take.wav")).unwrap().is_empty());
+        assert!(root_name(&path("\\..\\take.wav")).unwrap().is_empty());
+        assert!(root_name(&path("\\C:take.wav")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn pending_spool_writes_at_offsets_and_zero_fills_gaps() {
+        let mut spool = WriteSpool::create_for_mount(path("offset.wav").as_slice()).unwrap();
+        spool.write_at(b"stash", 4, false).unwrap();
+        let path = spool.path().to_path_buf();
+        spool.prepare().unwrap();
+        let bytes = std::fs::read(path).unwrap();
+        assert_eq!(bytes, b"\0\0\0\0stash");
+    }
+
+    #[test]
+    fn pending_spool_accepts_windows_style_resize_before_write() {
+        let spool = WriteSpool::create_for_mount(path("resize.wav").as_slice()).unwrap();
+        let mut pending = PendingWrite {
+            spool: Some(spool),
+            reserved_name: None,
+            submitted: false,
+            failure: None,
+            size: 0,
+        };
+        pending.set_size(8).unwrap();
+        pending.write_at(b"ok", 2, false).unwrap();
+        assert_eq!(pending.size, 8);
+        let spool = pending.spool.take().unwrap();
+        let spool_path = spool.path().to_path_buf();
+        drop(spool);
+        assert!(!spool_path.exists());
+    }
+
+    #[test]
+    fn duplicate_and_directory_names_are_rejected_before_sink_submission() {
+        let fs = one_file_context();
+        assert!(matches!(fs.resolve(&path("\\kick.wav")), Resolved::File(_)));
+        assert!(root_name(&path("\\folder\\")).unwrap().is_empty());
+        assert!(root_name(&path("\\new.wav")).unwrap().len() > 0);
+    }
+
+    #[test]
+    fn cleanup_and_submission_are_idempotent() {
+        let sink = CountingSink {
+            submissions: AtomicUsize::new(0),
+        };
+        let spool = WriteSpool::create_for_mount(path("once.wav").as_slice()).unwrap();
+        let path = spool.path().to_path_buf();
+        let mut pending = PendingWrite {
+            spool: Some(spool),
+            reserved_name: None,
+            submitted: false,
+            failure: None,
+            size: 0,
+        };
+        let pending_names = Mutex::new(std::collections::HashSet::new());
+        pending.finalize(&sink, &pending_names);
+        pending.finalize(&sink, &pending_names);
+        assert_eq!(sink.submissions.load(Ordering::SeqCst), 1);
+        assert!(!path.exists());
+        let _ = std::fs::remove_file(path);
+    }
+    #[test]
+    fn successful_cleanup_releases_name_for_a_retry() {
+        let sink = CountingSink {
+            submissions: AtomicUsize::new(0),
+        };
+        let fs = one_file_context();
+        let name = path("cleanup-retry.wav");
+        assert!(fs.reserve_pending_name(name.as_slice()));
+        let spool = WriteSpool::create_for_mount(name.as_slice()).unwrap();
+        let mut pending = PendingWrite {
+            spool: Some(spool),
+            reserved_name: Some(name.as_slice().to_vec()),
+            submitted: false,
+            failure: None,
+            size: 0,
+        };
+        pending.finalize(&sink, &fs.pending_names);
+        assert_eq!(sink.submissions.load(Ordering::SeqCst), 1);
+        assert!(fs.reserve_pending_name(name.as_slice()));
+        fs.release_pending_name(name.as_slice());
+    }
+
+
+    #[test]
+    fn security_lookup_preserves_directory_and_file_attributes() {
         let fs = one_file_context();
         let root = fs
             .get_security_by_name(&path("\\"), None, |_| None)

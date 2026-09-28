@@ -1,0 +1,25 @@
+{
+  "name": "@stash/desktop-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "test": "npm run build:gateway-test && npm run build:foundation-test && node --test test/*.test.mjs",
+    "build:gateway-test": "vite build --config test/gateway-runtime.vite.config.ts",
+    "build:foundation-test": "vite build --config test/foundation-runtime.vite.config.ts",
+    "build": "npm run typecheck && vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "typescript": "7.0.2",
+    "vite": "8.3.0"
+  }
+}

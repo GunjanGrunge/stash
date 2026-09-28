@@ -14,16 +14,79 @@ use reqwest::blocking::Client as BlockingClient;
 use serde::{Deserialize, Serialize};
 use stash_core::ReadError;
 use stash_s3_provider::{HttpRangeProvider, LeaseSource};
-use stash_windows_fs::{StashFile, StashFileSystemContext};
+use stash_windows_fs::{StashFile, StashFileSystemContext, WriteSink, WriteSpool};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use windows::Win32::System::LibraryLoader::{LoadLibraryW, SetDllDirectoryW};
 use winfsp::host::{FileSystemHost, FileSystemParams, FineGuard, VolumeParams};
 
 const MOUNT_LETTER: &str = "S:";
 const SEGMENT_SIZE: u64 = 1 << 20; // 1 MiB
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
 
-type LiveHost = FileSystemHost<StashFileSystemContext<HttpRangeProvider<ApiLeaseSource>>, FineGuard>;
+#[cfg(target_arch = "x86_64")]
+const WINFSP_DLL: &str = "winfsp-x64.dll";
+#[cfg(target_arch = "x86")]
+const WINFSP_DLL: &str = "winfsp-x86.dll";
+#[cfg(target_arch = "aarch64")]
+const WINFSP_DLL: &str = "winfsp-a64.dll";
+
+type LiveHost =
+    FileSystemHost<StashFileSystemContext<HttpRangeProvider<ApiLeaseSource>>, FineGuard>;
+
+#[derive(Clone)]
+struct MountWriteSink {
+    uploads: crate::upload::UploadController,
+}
+
+impl WriteSink for MountWriteSink {
+    fn begin(&self, name: &[u16]) -> Result<WriteSpool, String> {
+        #[cfg(debug_assertions)]
+        eprintln!("[stash-mount] begin write spool for {} UTF-16 units", name.len());
+        WriteSpool::create_for_mount(name)
+    }
+
+    fn submit(&self, spool: WriteSpool) -> Result<(), String> {
+        #[cfg(debug_assertions)]
+        eprintln!("[stash-mount] submit completed write spool");
+        match self.uploads.submit_mount_spool(spool) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.uploads.mark_needs_attention(error.clone());
+                Err(error)
+            }
+        }
+    }
+}
+
+/// Loads the installed WinFsp DLL by its absolute installation path before
+/// the delay-loaded binding asks Windows for it by name. Development builds
+/// run from Cargo's target directory, which is not part of the WinFsp DLL
+/// search path.
+fn preload_winfsp() -> Result<(), String> {
+    let roots = ["ProgramFiles(x86)", "ProgramFiles"];
+    for variable in roots {
+        let Some(root) = std::env::var_os(variable) else {
+            continue;
+        };
+        let directory = std::path::PathBuf::from(root).join("WinFsp").join("bin");
+        let candidate = directory.join(WINFSP_DLL);
+        if !candidate.is_file() {
+            continue;
+        }
+        let directory = windows::core::HSTRING::from(directory.as_os_str());
+        // The Rust binding uses a delay-loaded import by basename. Set this
+        // process's DLL directory so that resolver finds the installed DLL
+        // later, not just this explicit preload call.
+        unsafe { SetDllDirectoryW(&directory) }
+            .map_err(|err| format!("STASH couldn't configure the Windows drive service: {err}"))?;
+        let path = windows::core::HSTRING::from(candidate.as_os_str());
+        unsafe { LoadLibraryW(&path) }
+            .map_err(|err| format!("STASH couldn't load the Windows drive service: {err}"))?;
+        return Ok(());
+    }
+    Err("STASH needs WinFsp installed to mount a virtual drive.".to_string())
+}
 
 /// Fetches and renews one file's download lease over the authenticated
 /// STASH API. Uses a blocking HTTP client deliberately: WinFSP calls
@@ -94,41 +157,58 @@ impl From<&MountState> for MountStatus {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct MountController {
     state: Arc<Mutex<MountState>>,
     host: Arc<Mutex<Option<LiveHost>>>,
+    write_sink: Arc<MountWriteSink>,
+}
+
+impl Default for MountController {
+    fn default() -> Self {
+        Self::with_uploads(crate::upload::UploadController::default())
+    }
 }
 
 impl MountController {
+    pub fn with_uploads(uploads: crate::upload::UploadController) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(MountState::default())),
+            host: Arc::new(Mutex::new(None)),
+            write_sink: Arc::new(MountWriteSink { uploads }),
+        }
+    }
     pub fn status(&self) -> MountStatus {
         let state = self.state.lock().expect("mount state lock poisoned");
         MountStatus::from(&*state)
     }
 
     pub async fn mount(&self) -> Result<MountStatus, String> {
-        if self.state.lock().expect("mount state lock poisoned").mounted {
+        if self
+            .state
+            .lock()
+            .expect("mount state lock poisoned")
+            .mounted
+        {
             return Ok(self.status());
         }
 
-        let files = crate::api::list_root_files().await?;
-        if files.is_empty() {
-            return Err("Your STASH has no committed files to mount yet.".to_string());
-        }
+        // WinFsp dynamically loads its native DLL. It must be initialized
+        // before a host is created; otherwise a delay-load exception can
+        // escape the native boundary and terminate the desktop process.
+        preload_winfsp()?;
+        winfsp::winfsp_init().map_err(|err| {
+            format!("STASH couldn't initialize the Windows drive service: {err:?}")
+        })?;
 
-        let mut entries = Vec::with_capacity(files.len());
-        for file in files {
-            let Some(file_id) = file.file_id else { continue };
-            let provider = HttpRangeProvider::new(ApiLeaseSource { file_id });
-            entries.push(StashFile::new(
-                &file.name,
-                file.size_bytes.unwrap_or(0),
-                SEGMENT_SIZE,
-                READ_TIMEOUT,
-                provider,
-            ));
-        }
-        let context = StashFileSystemContext::new(entries);
+        // An account with no committed files is still a valid STASH: mount
+        // it as an empty, usable root directory. Explorer and creative apps
+        // can then use the same S: drive before the first file arrives.
+        let files = crate::api::list_root_files().await?;
+        let context = StashFileSystemContext::new_with_write_sink(
+            mount_entries(files),
+            self.write_sink.clone(),
+        );
 
         // WinFSP's host/mount/dispatcher calls are blocking FFI, not async —
         // run them off the Tauri async runtime's own worker threads.
@@ -141,7 +221,7 @@ impl MountController {
                 .case_preserved_names(true)
                 .unicode_on_disk(true)
                 .persistent_acls(false)
-                .read_only_volume(true)
+                .read_only_volume(false)
                 .filesystem_name("STASH");
             let params = FileSystemParams::default_params(volume_params);
 
@@ -173,6 +253,29 @@ impl MountController {
         state.letter = None;
         Ok(MountStatus::from(&*state))
     }
+}
+
+/// Translates committed API rows into the read-only entries exposed by the
+/// current mount. An empty committed listing deliberately yields an empty
+/// directory rather than rejecting the mount.
+fn mount_entries(
+    files: Vec<crate::api::ChildItem>,
+) -> Vec<StashFile<HttpRangeProvider<ApiLeaseSource>>> {
+    let mut entries = Vec::with_capacity(files.len());
+    for file in files {
+        let Some(file_id) = file.file_id else {
+            continue;
+        };
+        let provider = HttpRangeProvider::new(ApiLeaseSource { file_id });
+        entries.push(StashFile::new(
+            &file.name,
+            file.size_bytes.unwrap_or(0),
+            SEGMENT_SIZE,
+            READ_TIMEOUT,
+            provider,
+        ));
+    }
+    entries
 }
 
 #[tauri::command]
@@ -222,5 +325,12 @@ mod tests {
         assert!(controller.unmount().is_ok());
         assert!(controller.unmount().is_ok());
         assert!(!controller.status().mounted);
+    }
+
+    #[test]
+    fn empty_committed_listing_creates_an_empty_mount_root() {
+        // Regression: an empty STASH is a valid, mountable drive. The live
+        // WinFSP host receives this empty entry table instead of an error.
+        assert!(mount_entries(Vec::new()).is_empty());
     }
 }
