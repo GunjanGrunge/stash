@@ -37,7 +37,7 @@ use windows::Win32::Foundation::{
     STATUS_OBJECT_NAME_NOT_FOUND,
 };
 use windows::Win32::Storage::FileSystem::{
-    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_READONLY,
+    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
 };
 use winfsp::filesystem::{
     DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, OpenFileInfo, VolumeInfo,
@@ -75,6 +75,18 @@ pub trait Library: Send + Sync {
     fn used_bytes(&self) -> Option<u64> {
         None
     }
+    /// Moves a file or folder (and everything under it) to STASH Trash.
+    /// Recoverable; nothing is destroyed. Default: not supported.
+    fn trash(&self, _target: TrashTarget<'_>) -> Result<(), ReadError> {
+        Err(ReadError::Io)
+    }
+}
+
+/// What a delete on the drive sends to STASH Trash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrashTarget<'a> {
+    File(&'a str),
+    Folder(&'a str),
 }
 
 /// Tunables for a mounted drive.
@@ -103,6 +115,7 @@ impl Default for DriveOptions {
 /// repeated opens (Explorer thumbnails, a DAW re-reading headers) reuse the
 /// same verified segment cache.
 pub struct OpenFile<P: RangeProvider> {
+    id: String,
     size: u64,
     cache: Cache,
     provider: P,
@@ -491,6 +504,8 @@ pub struct StashFileSystemContext<L: Library> {
     mounted_at: u64,
     write_sink: Arc<dyn WriteSink>,
     pending_names: Mutex<std::collections::HashSet<Vec<u16>>>,
+    /// "file:<id>" / "folder:<id>" marked for delete, awaiting cleanup.
+    pending_deletes: Mutex<std::collections::HashSet<String>>,
 }
 
 impl<L: Library> StashFileSystemContext<L> {
@@ -507,6 +522,7 @@ impl<L: Library> StashFileSystemContext<L> {
             mounted_at: filetime_now(),
             write_sink,
             pending_names: Mutex::new(std::collections::HashSet::new()),
+            pending_deletes: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -577,6 +593,42 @@ impl<L: Library> StashFileSystemContext<L> {
         Ok(Resolved::Dir(folder))
     }
 
+    /// The Trash key for a handle; the drive root and unsubmitted writes have none.
+    fn delete_key(context: &Handle<L::Provider>) -> Option<String> {
+        match context {
+            Handle::Dir(Some(id)) => Some(format!("folder:{id}")),
+            Handle::File(file) => Some(format!("file:{}", file.id)),
+            Handle::Dir(None) | Handle::Pending(_) => None,
+        }
+    }
+
+    /// Records or clears a pending delete (Windows' SetDelete step).
+    fn mark_delete(&self, context: &Handle<L::Provider>, delete: bool) -> Result<(), ReadError> {
+        let key = Self::delete_key(context).ok_or(ReadError::Io)?;
+        let mut pending = self.pending_deletes.lock().expect("pending deletes lock poisoned");
+        if delete { pending.insert(key); } else { pending.remove(&key); }
+        Ok(())
+    }
+
+    /// Carries out a pending delete (Windows' Cleanup step): the item goes to
+    /// STASH Trash and every cached listing is dropped so it disappears now.
+    fn perform_delete(&self, context: &Handle<L::Provider>) -> Result<(), ReadError> {
+        let Some(key) = Self::delete_key(context) else { return Ok(()) };
+        if !self.pending_deletes.lock().expect("pending deletes lock poisoned").remove(&key) {
+            return Ok(());
+        }
+        let result = match context {
+            Handle::Dir(Some(id)) => self.library.trash(TrashTarget::Folder(id)),
+            Handle::File(file) => self.library.trash(TrashTarget::File(&file.id)),
+            _ => Ok(()),
+        };
+        self.dirs.lock().expect("dir cache lock poisoned").clear();
+        if let Handle::File(file) = context {
+            self.open_files.lock().expect("open file lock poisoned").remove(&file.id);
+        }
+        result
+    }
+
     /// The shared open-file state for a committed file id.
     fn open_file(&self, id: &str, size: u64) -> Arc<OpenFile<L::Provider>> {
         let mut open = self.open_files.lock().expect("open file lock poisoned");
@@ -589,6 +641,7 @@ impl<L: Library> StashFileSystemContext<L> {
             open.retain(|_, file| Arc::strong_count(file) > 1);
         }
         let file = Arc::new(OpenFile {
+            id: id.to_string(),
             size,
             cache: Cache::new(self.options.segment_size, self.options.read_timeout, size, self.options.file_cache_bytes),
             provider: self.library.open_file(id),
@@ -613,7 +666,9 @@ impl<L: Library> StashFileSystemContext<L> {
 
     fn file_info(&self, size: u64) -> FileInfo {
         let mut info = FileInfo::default();
-        info.file_attributes = FILE_ATTRIBUTE_READONLY.0;
+        // Not READONLY: Windows refuses to delete read-only files, and a
+        // Stashed file can be moved to Trash. Edits are still refused in `write`.
+        info.file_attributes = FILE_ATTRIBUTE_NORMAL.0;
         info.file_size = size;
         info.allocation_size = size;
         self.times(&mut info);
@@ -652,7 +707,7 @@ impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
     ) -> FspResult<FileSecurity> {
         let attributes = match self.resolve(file_name).map_err(read_error_to_fsp)? {
             Resolved::Dir(_) => FILE_ATTRIBUTE_DIRECTORY.0,
-            Resolved::File { .. } => FILE_ATTRIBUTE_READONLY.0,
+            Resolved::File { .. } => FILE_ATTRIBUTE_NORMAL.0,
             Resolved::NotFound => return Err(FspError::NTSTATUS(STATUS_OBJECT_NAME_NOT_FOUND.0)),
         };
         Ok(FileSecurity { reparse: false, sz_security_descriptor: 0, attributes })
@@ -736,7 +791,15 @@ impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
         Ok(handle)
     }
 
-    fn cleanup(&self, context: &Self::FileContext, _file_name: Option<&U16CStr>, _flags: u32) {
+    fn cleanup(&self, context: &Self::FileContext, _file_name: Option<&U16CStr>, flags: u32) {
+        const FSP_CLEANUP_DELETE: u32 = 0x01;
+        if flags & FSP_CLEANUP_DELETE != 0 {
+            // Windows can't report a cleanup failure; a failed Trash call
+            // simply leaves the item listed on the next refresh.
+            if self.perform_delete(context).is_err() {
+                debug_mount_trace("cleanup: trash failed");
+            }
+        }
         if let Handle::Pending(pending) = context {
             debug_mount_trace("cleanup: pending handle");
             if let Ok(mut pending) = pending.lock() {
@@ -848,11 +911,31 @@ impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
 
     fn set_delete(
         &self,
-        _context: &Self::FileContext,
+        context: &Self::FileContext,
         _file_name: &U16CStr,
-        _delete_file: bool,
+        delete_file: bool,
     ) -> FspResult<()> {
-        Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0))
+        // Deleting on S: moves the item to STASH Trash (recoverable). The
+        // drive root and not-yet-submitted writes can't be deleted.
+        self.mark_delete(context, delete_file)
+            .map_err(|_| FspError::NTSTATUS(STATUS_ACCESS_DENIED.0))
+    }
+
+    /// Explorer and most apps set attributes and times after copying or
+    /// touching a file. STASH doesn't store either yet, so accept the call
+    /// and report the item's current info instead of failing the copy.
+    #[allow(clippy::too_many_arguments)]
+    fn set_basic_info(
+        &self,
+        context: &Self::FileContext,
+        _file_attributes: u32,
+        _creation_time: u64,
+        _last_access_time: u64,
+        _last_write_time: u64,
+        _last_change_time: u64,
+        file_info: &mut FileInfo,
+    ) -> FspResult<()> {
+        self.get_file_info(context, file_info)
     }
 
     fn set_file_size(
@@ -943,6 +1026,7 @@ mod tests {
         list_calls: AtomicUsize,
         opens: AtomicUsize,
         offline: AtomicBool,
+        trashed: Mutex<Vec<String>>,
     }
 
     impl Library for FakeLibrary {
@@ -960,6 +1044,15 @@ mod tests {
         }
         fn used_bytes(&self) -> Option<u64> {
             Some(42)
+        }
+        fn trash(&self, target: TrashTarget<'_>) -> Result<(), ReadError> {
+            self.trashed.lock().unwrap().push(format!("{target:?}"));
+            // Trashed items no longer list, like the real control plane.
+            let id = match target { TrashTarget::File(id) | TrashTarget::Folder(id) => id.to_string() };
+            for children in self.folders.lock().unwrap().values_mut() {
+                children.retain(|child| !matches!(child, Listing::File { id: i, .. } | Listing::Folder { id: i, .. } if *i == id));
+            }
+            Ok(())
         }
     }
 
@@ -1128,7 +1221,8 @@ mod tests {
         let dir = fs.get_security_by_name(&path("\\KSHMR Vol 5"), None, |_| None).unwrap();
         assert_eq!(dir.attributes, FILE_ATTRIBUTE_DIRECTORY.0);
         let file = fs.get_security_by_name(&path("\\KSHMR Vol 5\\Kicks\\Kick_G#_128.wav"), None, |_| None).unwrap();
-        assert_eq!(file.attributes, FILE_ATTRIBUTE_READONLY.0);
+        // Not read-only: Windows refuses to delete read-only files.
+        assert_eq!(file.attributes, FILE_ATTRIBUTE_NORMAL.0);
         assert!(fs.get_security_by_name(&path("\\missing.wav"), None, |_| None).is_err());
     }
 
@@ -1137,6 +1231,44 @@ mod tests {
         let info = fs().file_info(1);
         // 2020-01-01 as FILETIME.
         assert!(info.last_write_time > 132_223_104_000_000_000);
+    }
+
+    #[test]
+    fn deleting_a_file_sends_it_to_trash_and_it_disappears_immediately() {
+        let fs = fs(); // 60 s listing TTL: only cache invalidation can hide it.
+        let handle = Handle::File(fs.open_file("kick", 17));
+        assert!(fs.resolve(&path("\\KSHMR Vol 5\\Kicks\\Kick_G#_128.wav")).unwrap() != Resolved::NotFound);
+        fs.mark_delete(&handle, true).unwrap();
+        fs.perform_delete(&handle).unwrap();
+        assert_eq!(*fs.library.trashed.lock().unwrap(), vec![r#"File("kick")"#]);
+        assert_eq!(fs.resolve(&path("\\KSHMR Vol 5\\Kicks\\Kick_G#_128.wav")).unwrap(), Resolved::NotFound);
+    }
+
+    #[test]
+    fn deleting_a_folder_trashes_the_folder() {
+        let fs = fs();
+        let handle = Handle::Dir(Some("pack".into()));
+        fs.mark_delete(&handle, true).unwrap();
+        fs.perform_delete(&handle).unwrap();
+        assert_eq!(*fs.library.trashed.lock().unwrap(), vec![r#"Folder("pack")"#]);
+        assert_eq!(fs.resolve(&path("\\KSHMR Vol 5")).unwrap(), Resolved::NotFound);
+    }
+
+    #[test]
+    fn cleanup_without_a_pending_delete_trashes_nothing() {
+        let fs = fs();
+        let handle = Handle::File(fs.open_file("kick", 17));
+        fs.perform_delete(&handle).unwrap();
+        fs.mark_delete(&handle, true).unwrap();
+        fs.mark_delete(&handle, false).unwrap(); // Windows may retract a delete.
+        fs.perform_delete(&handle).unwrap();
+        assert!(fs.library.trashed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_drive_root_can_never_be_deleted() {
+        let fs = fs();
+        assert!(fs.mark_delete(&Handle::Dir(None), true).is_err());
     }
 
     #[test]
