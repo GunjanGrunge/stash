@@ -1350,6 +1350,8 @@ html, body, #root {
 }
 @media (max-width: 760px) {
   .search-results th:nth-child(2), .search-results td:nth-child(2) { display: none; }
+}
+
 /* --- Welcome and sign in (Figma node 6:4) --- */
 .welcome-layout {
   flex: 1;
