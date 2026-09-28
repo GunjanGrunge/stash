@@ -70,3 +70,26 @@ export type TransferStatus = {
   message?: string | null;
 };
 
+
+export type SearchKind = "audio" | "midi" | "video" | "image" | "document" | "other";
+
+export type SearchHit = {
+  fileId: string;
+  name: string;
+  path: string;
+  sizeBytes: number;
+  kind: SearchKind;
+  extension?: string | null;
+  bpm?: number | null;
+  key?: string | null;
+  resolution?: number | null;
+  fps?: number | null;
+};
+
+export type SearchResponse = {
+  hits: SearchHit[];
+  total: number;
+  unsupported: string[];
+  indexedFiles: number;
+  truncated: boolean;
+};
