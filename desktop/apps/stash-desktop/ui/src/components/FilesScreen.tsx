@@ -10,7 +10,7 @@ export function formatBytes(value?: number | null): string {
   let amount = value;
   let unit = -1;
   do { amount /= 1024; unit += 1; } while (amount >= 1024 && unit < units.length - 1);
-  return `${amount.toFixed(amount >= 10 ? 0 : 1)} ${units[unit]}`;
+  return `${amount.toFixed(amount >= 10 ? 0 : 1).replace(/\.0$/, "")} ${units[unit]}`;
 }
 
 const kindOf = (item: ChildItem) => item.entity === "FOLDER" ? "Folder" : "File";

@@ -11,7 +11,6 @@ export function App() {
   const [auth, dispatch] = useReducer(authReducer, initialAuthState);
   const [showSplash, setShowSplash] = useState(true);
   const [signOutError, setSignOutError] = useState("");
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
 
   useEffect(() => {
     let active = true;
@@ -21,12 +20,6 @@ export function App() {
     }).catch(() => { if (active) dispatch({ type: "RESTORE_SIGNED_OUT" }); });
     return () => { active = false; };
   }, [gateway]);
-
-  const toggleTheme = () => {
-    const nextTheme = theme === "dark" ? "light" : "dark";
-    setTheme(nextTheme);
-    document.documentElement.setAttribute("data-theme", nextTheme);
-  };
 
   const signOut = async () => {
     setSignOutError("");
@@ -40,12 +33,7 @@ export function App() {
 
   return (
     <div className="app-shell-root">
-      <TitleBar
-        gateway={gateway}
-        theme={theme}
-        onToggleTheme={toggleTheme}
-        onReplaySplash={() => setShowSplash(true)}
-      />
+      <TitleBar gateway={gateway} />
       {auth.view === "signedIn" ? (
         <Shell gateway={gateway} username={auth.username} onSignOut={() => void signOut()} signOutError={signOutError} />
       ) : (

@@ -41,7 +41,7 @@ export function SettingsScreen({ username }: Props) {
               <p className="profile-email">gunjan@stash.com</p>
 
               <div className="plan-badge-row">
-                <span className="badge-creator">Creator Pro &bull; Active</span>
+                <span className="badge-creator">Private beta</span>
                 <span className="quota-text">624 GB of 1 TB used</span>
               </div>
             </div>

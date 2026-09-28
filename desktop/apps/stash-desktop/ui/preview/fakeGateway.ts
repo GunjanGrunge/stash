@@ -65,7 +65,7 @@ export function createPreviewGateway(): DesktopGateway {
       listChildren: async (folderId) => ({ items: folders[folderId] ?? [] }),
       createFolder: async (name) => ({ entity: "FOLDER", folderId: `new-${name}`, name }),
       trashFolder: ok,
-      getUsage: async () => ({ provisioned: true, usedBytes: 624_000_000_000, quotaBytes: 1_000_000_000_000 }),
+      getUsage: async () => ({ provisioned: true, usedBytes: 624 * 1024 ** 3, quotaBytes: 1024 ** 4 }),
       mountStatus: async () => mount(),
       mountStash: async () => { mounted = true; return mount(); },
       unmountStash: async () => { mounted = false; return mount(); },

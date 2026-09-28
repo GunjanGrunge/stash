@@ -23,7 +23,7 @@ test("source review and transfer UI preserve honest phases without fake completi
   assert.match(screen, /status\?\.phase === "Stashed"/);
   assert.match(home, /History is not connected/);
   assert.match(home, /Offline files and cache controls remain unavailable/);
-  assert.match(shell, /useState<NavItem>\("Home"\)/);
+  assert.match(shell, /initialScreen = "Home"/);
 });
 
 test("Files remains hierarchy-preserving and the visual slice adds native Stash It without web APIs", async () => {

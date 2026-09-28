@@ -28,7 +28,7 @@ function Preview() {
   const [auth, dispatch] = useReducer(authReducer, { view: "welcome" });
   return (
     <div className="app-shell-root">
-      <TitleBar gateway={gateway} theme="dark" onToggleTheme={() => undefined} />
+      <TitleBar gateway={gateway} />
       {params.get("view") === "welcome"
         ? <WelcomeScreen gateway={gateway} state={auth} dispatch={dispatch} />
         : <Shell gateway={gateway} username="Maya Chen" onSignOut={() => undefined} initialScreen={screen} initialStashOpen={params.get("stash") === "1"} />}
