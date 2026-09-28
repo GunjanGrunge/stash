@@ -1,5 +1,25 @@
 # STASH Brand Kit
 
+> **Decision 2026-09-28 — the Figma file now leads.** The product UI is
+> designed in Figma: <https://www.figma.com/design/oAh0eJj8QqTG7551p9GtfP/stash>.
+> Where this kit and Figma disagree, **Figma wins**. In particular the
+> in-app identity is a lime mark and lime primary actions on near-black
+> surfaces, replacing the cyan→violet gradient below:
+>
+> | Token | Value | Use |
+> |---|---|---|
+> | `--accent` | `#B7FF3C` | Brand mark, primary buttons, focus |
+> | `--accent-ink` | `#101604` | Text on accent |
+> | `--accent-soft` | `#263716` | Accent pill background |
+> | `--surface` / `--surface-alt` | `#0E1014` / `#101115` | App backgrounds |
+> | `--surface-card` / `--surface-raised` / `--surface-sunken` | `#15171C` / `#1A1D23` / `#0B0C0F` | Cards, secondary buttons, inputs |
+> | `--text` / `--muted` / `--text-faint` | `#F3F5F7` / `#949BA8` / `#69707D` | Text |
+> | `--border` / `--border-strong` | `#292D35` / `#383E49` | Dividers, input and button borders |
+>
+> Type is Inter (400/500/700/800) with Roboto Mono for paths and labels,
+> both bundled in the desktop app via `@fontsource`. The sections below remain
+> for the logo/icon asset pack until those assets are redrawn to match.
+
 ## Source of truth
 
 All supplied brand files live under `brand/`. Preserve the original files;
