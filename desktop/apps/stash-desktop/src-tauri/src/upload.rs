@@ -51,6 +51,7 @@ pub enum TransferPhase {
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TransferStatus {
     pub phase: TransferPhase,
     pub source_name: Option<String>,
@@ -63,12 +64,14 @@ pub struct TransferStatus {
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SourceEntry {
     pub relative_path: String,
     pub size_bytes: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SourceSummary {
     pub source_name: String,
     pub folder_name: String,
@@ -907,6 +910,31 @@ fn pick_native_path(_kind: &str, _start: Option<&str>) -> Result<PathBuf, String
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    /// The webview gateway rejects anything but these camelCase names
+    /// (`sourceSummary` / `transferStatus` in `ui/src/platform/tauri/gateway.ts`).
+    #[test]
+    fn status_and_summary_serialize_with_the_field_names_the_ui_validates() {
+        let summary = SourceSummary {
+            source_name: "Pack".into(),
+            folder_name: "Pack".into(),
+            file_count: 1,
+            total_bytes: 2,
+            entries: vec![SourceEntry { relative_path: "Pack/a.wav".into(), size_bytes: 2 }],
+        };
+        let json = serde_json::to_value(&summary).unwrap();
+        for key in ["sourceName", "folderName", "fileCount", "totalBytes", "entries"] {
+            assert!(json.get(key).is_some(), "summary missing {key}: {json}");
+        }
+        assert!(json["entries"][0].get("relativePath").is_some());
+        assert!(json["entries"][0].get("sizeBytes").is_some());
+
+        let status = serde_json::to_value(status_for(&summary)).unwrap();
+        for key in ["phase", "sourceName", "fileCount", "completedFileCount", "totalBytes", "completedBytes", "manifestMatch", "message"] {
+            assert!(status.get(key).is_some(), "status missing {key}: {status}");
+        }
+        assert_eq!(status["phase"], "Preparing");
+    }
 
     #[test]
     fn picker_starts_only_in_allow_listed_folders() {
