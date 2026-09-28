@@ -447,6 +447,22 @@ impl SearchIndex {
         self.docs.len()
     }
 
+    /// Bytes and file counts per media kind across every indexed file.
+    pub fn kind_totals(&self) -> Vec<(MediaKind, u64, usize)> {
+        let mut totals: Vec<(MediaKind, u64, usize)> = Vec::new();
+        for doc in &self.docs {
+            let kind = doc.meta.kind.unwrap_or(MediaKind::Other);
+            match totals.iter_mut().find(|(k, _, _)| *k == kind) {
+                Some(entry) => {
+                    entry.1 = entry.1.saturating_add(doc.doc.size_bytes);
+                    entry.2 += 1;
+                }
+                None => totals.push((kind, doc.doc.size_bytes, 1)),
+            }
+        }
+        totals
+    }
+
     pub fn is_empty(&self) -> bool {
         self.docs.is_empty()
     }
@@ -748,6 +764,18 @@ mod tests {
     #[test]
     fn empty_query_returns_nothing() {
         assert_eq!(library().search("  ", 10).total, 0);
+    }
+
+    #[test]
+    fn kind_totals_sum_bytes_and_counts_per_media_kind() {
+        let totals = library().kind_totals();
+        let find = |kind| totals.iter().find(|(k, _, _)| *k == kind).map(|(_, b, n)| (*b, *n));
+        // Five WAVs, two videos, one SVG, one PDF and one .cube (Other), 1 byte each.
+        assert_eq!(find(MediaKind::Audio), Some((5, 5)));
+        assert_eq!(find(MediaKind::Video), Some((2, 2)));
+        assert_eq!(find(MediaKind::Image), Some((1, 1)));
+        assert_eq!(find(MediaKind::Document), Some((1, 1)));
+        assert_eq!(find(MediaKind::Other), Some((1, 1)));
     }
 
     #[test]

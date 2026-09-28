@@ -93,3 +93,23 @@ export type SearchResponse = {
   indexedFiles: number;
   truncated: boolean;
 };
+
+/** One ingestion event in Recent Stashes. */
+export type StashSummary = {
+  stashId: string;
+  state: "open" | "completed" | "cancelled";
+  fileCount: number;
+  committedCount: number;
+  committedBytes: number;
+  startedAt: string;
+  updatedAt: string;
+  /** Folder name, when the backend reports it. */
+  name: string | null;
+};
+
+/** This workstation, as the native side reports it. */
+export type DeviceInfo = { name: string; os: string; appVersion: string };
+
+export type KindTotal = { kind: SearchKind; bytes: number; files: number };
+/** Cloud usage by media kind, from the on-device index. */
+export type StorageBreakdown = { kinds: KindTotal[]; indexedFiles: number; truncated: boolean };

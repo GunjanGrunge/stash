@@ -51,6 +51,7 @@ pub enum TransferPhase {
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TransferStatus {
     pub phase: TransferPhase,
     pub source_name: Option<String>,
@@ -63,12 +64,14 @@ pub struct TransferStatus {
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SourceEntry {
     pub relative_path: String,
     pub size_bytes: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SourceSummary {
     pub source_name: String,
     pub folder_name: String,
@@ -301,9 +304,10 @@ fn lock(
 #[tauri::command]
 pub fn select_stash_source(
     kind: String,
+    start: Option<String>,
     controller: State<'_, UploadController>,
 ) -> Result<SourceSummary, String> {
-    let root = pick_native_path(&kind)?;
+    let root = pick_native_path(&kind, start.as_deref())?;
     controller.select_source_path(root)
 }
 
@@ -854,17 +858,39 @@ fn checksum_reader<R: Read>(mut reader: R) -> Result<String, String> {
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
+/// The picker's starting folder, as a fixed PowerShell expression. Only
+/// these names are accepted, so nothing from the webview reaches the script.
+fn start_folder_expr(start: Option<&str>) -> Result<Option<&'static str>, String> {
+    match start {
+        None => Ok(None),
+        Some("desktop") => Ok(Some("[Environment]::GetFolderPath('Desktop')")),
+        Some("documents") => Ok(Some("[Environment]::GetFolderPath('MyDocuments')")),
+        Some("downloads") => Ok(Some("(Join-Path $env:USERPROFILE 'Downloads')")),
+        Some(_) => Err("That starting folder isn't available.".to_string()),
+    }
+}
+
+/// The PowerShell dialog script for a file or folder picker.
+fn picker_script(kind: &str, start: Option<&str>) -> Result<String, String> {
+    let start = start_folder_expr(start)?;
+    match kind {
+        "folder" => Ok(format!(
+            "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.FolderBrowserDialog; {}if($d.ShowDialog() -eq 'OK'){{[Console]::Write($d.SelectedPath)}}",
+            start.map(|expr| format!("$d.SelectedPath={expr}; ")).unwrap_or_default()
+        )),
+        "file" => Ok(format!(
+            "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; {}if($d.ShowDialog() -eq 'OK'){{[Console]::Write($d.FileName)}}",
+            start.map(|expr| format!("$d.InitialDirectory={expr}; ")).unwrap_or_default()
+        )),
+        _ => Err("Choose a file or folder.".to_string()),
+    }
+}
+
 #[cfg(target_os = "windows")]
-fn pick_native_path(kind: &str) -> Result<PathBuf, String> {
-    let script = if kind == "folder" {
-        "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.FolderBrowserDialog; if($d.ShowDialog() -eq 'OK'){[Console]::Write($d.SelectedPath)}"
-    } else if kind == "file" {
-        "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; if($d.ShowDialog() -eq 'OK'){[Console]::Write($d.FileName)}"
-    } else {
-        return Err("Choose a file or folder.".to_string());
-    };
+fn pick_native_path(kind: &str, start: Option<&str>) -> Result<PathBuf, String> {
+    let script = picker_script(kind, start)?;
     let output = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-STA", "-Command", script])
+        .args(["-NoProfile", "-STA", "-Command", script.as_str()])
         .output()
         .map_err(|_| "The native source picker is unavailable.".to_string())?;
     let path = String::from_utf8(output.stdout)
@@ -876,7 +902,7 @@ fn pick_native_path(kind: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(path))
 }
 #[cfg(not(target_os = "windows"))]
-fn pick_native_path(_kind: &str) -> Result<PathBuf, String> {
+fn pick_native_path(_kind: &str, _start: Option<&str>) -> Result<PathBuf, String> {
     Err("The native source picker is available in the Windows desktop build.".to_string())
 }
 
@@ -884,6 +910,41 @@ fn pick_native_path(_kind: &str) -> Result<PathBuf, String> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    /// The webview gateway rejects anything but these camelCase names
+    /// (`sourceSummary` / `transferStatus` in `ui/src/platform/tauri/gateway.ts`).
+    #[test]
+    fn status_and_summary_serialize_with_the_field_names_the_ui_validates() {
+        let summary = SourceSummary {
+            source_name: "Pack".into(),
+            folder_name: "Pack".into(),
+            file_count: 1,
+            total_bytes: 2,
+            entries: vec![SourceEntry { relative_path: "Pack/a.wav".into(), size_bytes: 2 }],
+        };
+        let json = serde_json::to_value(&summary).unwrap();
+        for key in ["sourceName", "folderName", "fileCount", "totalBytes", "entries"] {
+            assert!(json.get(key).is_some(), "summary missing {key}: {json}");
+        }
+        assert!(json["entries"][0].get("relativePath").is_some());
+        assert!(json["entries"][0].get("sizeBytes").is_some());
+
+        let status = serde_json::to_value(status_for(&summary)).unwrap();
+        for key in ["phase", "sourceName", "fileCount", "completedFileCount", "totalBytes", "completedBytes", "manifestMatch", "message"] {
+            assert!(status.get(key).is_some(), "status missing {key}: {status}");
+        }
+        assert_eq!(status["phase"], "Preparing");
+    }
+
+    #[test]
+    fn picker_starts_only_in_allow_listed_folders() {
+        assert!(picker_script("folder", None).unwrap().contains("FolderBrowserDialog"));
+        assert!(!picker_script("folder", None).unwrap().contains("SelectedPath=["));
+        assert!(picker_script("folder", Some("desktop")).unwrap().contains("$d.SelectedPath=[Environment]::GetFolderPath('Desktop'); "));
+        assert!(picker_script("file", Some("downloads")).unwrap().contains("$d.InitialDirectory=(Join-Path $env:USERPROFILE 'Downloads'); "));
+        assert!(picker_script("file", Some("C:\\; Remove-Item x")).is_err());
+        assert!(picker_script("script", None).is_err());
+    }
 
     #[test]
     fn preserves_relative_names_and_hierarchy() {

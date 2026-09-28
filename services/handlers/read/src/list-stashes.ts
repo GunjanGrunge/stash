@@ -16,6 +16,8 @@ interface StashView {
   committedBytes: number;
   startedAt: string;
   updatedAt: string;
+  /** Folder name the creator Stashed, for Recent Stashes; null if unknown. */
+  name: string | null;
 }
 
 function toView(record: StashRecord): StashView {
@@ -28,6 +30,7 @@ function toView(record: StashRecord): StashView {
     committedBytes: record.committedBytes,
     startedAt: record.startedAt,
     updatedAt: record.updatedAt,
+    name: typeof record.manifestFolderName === "string" && record.manifestFolderName.length > 0 ? record.manifestFolderName : null,
   };
 }
 

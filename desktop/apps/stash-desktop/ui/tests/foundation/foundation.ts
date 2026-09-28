@@ -147,15 +147,15 @@ export function runThemeAccessibilityContracts(): FoundationSummary {
   for (const token of requiredTokens) if (!light.includes(`--${token}:`)) throw new Error(`Visual token is incomplete: ${token}`);
   if (!css.includes("prefers-color-scheme: dark") || !css.includes("focus-visible")) throw new Error("Theme or focus contract changed.");
   for (const label of ["Minimize window", "Maximize or restore window", "Hide STASH to tray"]) if (!titleBarSource.includes(`aria-label=\"${label}\"`)) throw new Error(`Missing window action name: ${label}`);
-  if (!navigationSource.includes("rail-notice") || !navigationSource.includes("Refresh") || !filesSource.includes("banner-warning") || !filesSource.includes("toggleSort")) throw new Error("Status/action naming contract changed.");
+  if (!navigationSource.includes('role="alert"') || !navigationSource.includes("Refresh storage") || !filesSource.includes("banner-warning") || !filesSource.includes("toggleSort")) throw new Error("Status/action naming contract changed.");
   return { property: "P5 semantic theme tokens, non-color status labels, focus/action names, and reduced motion", cases: requiredTokens.length * 2 + 7 };
 }
 
 export function runWritePathUiContracts(): FoundationSummary {
   for (const token of ["onCompleteRef", "finishedRef", "clearTimeout", "onClick={complete}"]) if (!splashSource.includes(token)) throw new Error(`Splash lifecycle contract missing: ${token}`);
-  for (const token of ["onNativeDrop", "is-drag-over", "Choose file", "Choose folder", "Paths stay in the native STASH boundary"]) if (!stashItSource.includes(token)) throw new Error(`Drop entry contract missing: ${token}`);
+  for (const token of ["onNativeDrop", "is-drag-over", "Choose file", "Choose folder", "Release to Stash it"]) if (!stashItSource.includes(token)) throw new Error(`Drop entry contract missing: ${token}`);
   if (!shellSource.includes("UnavailableScreen") || /active === \"Files\" \|\| active === \"Search\"/.test(shellSource)) throw new Error("Unavailable navigation destinations silently reuse Files.");
-  for (const label of ["Search", "Favorites", "Recent Stashes"]) if (!unavailableSource.includes("STASH capability notice") || !shellSource.includes(label)) throw new Error(`Navigation notice missing: ${label}`);
+  for (const label of ["Search", "Recent Stashes"]) if (!unavailableSource.includes("STASH capability notice") || !shellSource.includes(label)) throw new Error(`Navigation notice missing: ${label}`);
   if (!shellSource.includes("onNativeDrop") || !shellSource.includes("setDragOver")) throw new Error("Home drag-over subscription is missing.");
   return { property: "P7 splash cleanup/skip, native drop entry, and explicit unavailable navigation", cases: 4 };
 }

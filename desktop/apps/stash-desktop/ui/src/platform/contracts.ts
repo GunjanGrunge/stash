@@ -1,6 +1,8 @@
-import type { AuthOutcome, ChildItem, MountStatus, NativeDropNotice, RestoreOutcome, SearchResponse, SourceSummary, TransferStatus, Usage } from "../domain/types";
+import type { AuthOutcome, ChildItem, DeviceInfo, MountStatus, NativeDropNotice, RestoreOutcome, SearchResponse, SourceSummary, StashSummary, StorageBreakdown, TransferStatus, Usage } from "../domain/types";
 
 export type WindowAction = "minimize" | "toggle-maximize" | "close";
+/** Folders the Stash it picker can open in; the native side allow-lists these. */
+export type StashStart = "desktop" | "downloads" | "documents";
 
 export type DesktopGateway = {
   readonly kind: "tauri" | "unavailable";
@@ -22,9 +24,15 @@ export type DesktopGateway = {
     unmountStash(): Promise<MountStatus>;
     /** Searches this device's index of the user's STASH; `refresh` re-reads the file list first. */
     search(query: string, refresh?: boolean): Promise<SearchResponse>;
+    /** Cloud usage by media kind across the user's committed files. */
+    storageBreakdown(refresh?: boolean): Promise<StorageBreakdown>;
+    /** Recent Stashes, most recent first. */
+    listStashes(): Promise<StashSummary[]>;
   };
+  device: { info(): Promise<DeviceInfo> };
   stash: {
-    selectSource(kind: "file" | "folder"): Promise<SourceSummary>;
+    /** Opens the native picker, optionally starting in a known folder. */
+    selectSource(kind: "file" | "folder", start?: StashStart): Promise<SourceSummary>;
     confirm(): Promise<TransferStatus>;
     status(): Promise<TransferStatus>;
     cancel(): Promise<TransferStatus>;

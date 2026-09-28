@@ -1,158 +1,115 @@
-import type { DesktopGateway } from "../platform/contracts";
-import {
-  ClockIcon,
-  FolderIcon,
-  HomeIcon,
-  LogOutIcon,
-  RefreshIcon,
-  SearchIcon,
-  SettingsIcon,
-  StarIcon,
-  ZapIcon
-} from "./icons";
+import { useEffect, useRef, useState } from "react";
+import arrowUpDownIcon from "../assets/figma/shell/arrow-up-down.svg";
+import avatarImage from "../assets/figma/shell/avatar.svg";
+import chevronsIcon from "../assets/figma/shell/chevrons-up-down.svg";
+import folderIcon from "../assets/figma/shell/folder.svg";
+import historyIcon from "../assets/figma/shell/history.svg";
+import houseIcon from "../assets/figma/shell/house.svg";
+import pinIcon from "../assets/figma/shell/pin.svg";
+import searchIcon from "../assets/figma/shell/search-nav.svg";
+import settingsIcon from "../assets/figma/shell/settings.svg";
 
-export const NAV_ITEMS = ["Home", "Search", "Files", "Favorites", "Recent Stashes", "Offline", "Transfers", "Settings"] as const;
-type NavItem = typeof NAV_ITEMS[number];
-type Capability = Parameters<DesktopGateway["unavailable"]>[0];
+/** Figma sidebar order (node 3:24395). */
+export const NAV_ITEMS = ["Home", "Files", "Search", "Recent Stashes", "Offline", "Transfers", "Settings"] as const;
+export type NavItem = typeof NAV_ITEMS[number];
+
+const NAV_ICONS: Record<NavItem, string> = {
+  Home: houseIcon,
+  Files: folderIcon,
+  Search: searchIcon,
+  "Recent Stashes": historyIcon,
+  Offline: pinIcon,
+  Transfers: arrowUpDownIcon,
+  Settings: settingsIcon,
+};
 
 type Props = {
-  gateway: DesktopGateway;
   active: NavItem;
   onNavigate: (item: NavItem) => void;
   onStash: () => void;
-  mount: string;
-  mounted: boolean;
-  mountBusy: boolean;
-  mountActionError?: string;
-  onToggleMount: () => void;
+  /** e.g. "624 GB of 1 TB", or why storage is unavailable. */
   usage: string;
-  usagePercent: number;
+  /** 0–100, or null while unknown. */
+  usagePercent: number | null;
+  onRetryUsage: () => void;
   username: string;
   onSignOut: () => void;
   signOutError?: string;
-  notice?: string;
-  onUnavailable: (capability: Capability) => void;
-  onRetryUsage: () => void;
-  onRetryMount: () => void;
 };
 
-function initials(name: string): string {
-  const parts = name.trim().split(/[\s@.]+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[1][0]).toUpperCase();
+/** Monochrome Figma icon, tinted by `currentColor` so the active item turns lime. */
+export function MaskIcon({ src, size }: { src: string; size: number }) {
+  return <span className="mask-icon" aria-hidden="true" style={{ width: size, height: size, WebkitMaskImage: `url("${src}")`, maskImage: `url("${src}")` }} />;
 }
 
-const NAV_ICONS: Record<NavItem, React.ReactNode> = {
-  Home: <HomeIcon size={18} />,
-  Search: <SearchIcon size={18} />,
-  Files: <FolderIcon size={18} />,
-  Favorites: <StarIcon size={18} />,
-  "Recent Stashes": <ClockIcon size={18} />,
-  Offline: <ZapIcon size={18} />,
-  Transfers: <RefreshIcon size={18} />,
-  Settings: <SettingsIcon size={18} />
-};
+/** Figma "Sidebar" (node 3:24388). */
+export function NavigationRail({ active, onNavigate, onStash, usage, usagePercent, onRetryUsage, username, onSignOut, signOutError }: Props) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const profile = useRef<HTMLDivElement>(null);
 
-export function NavigationRail({
-  active,
-  onNavigate,
-  onStash,
-  mount,
-  mounted,
-  mountBusy,
-  mountActionError,
-  onToggleMount,
-  usage,
-  usagePercent,
-  username,
-  onSignOut,
-  signOutError,
-  notice,
-  onUnavailable,
-  onRetryUsage,
-  onRetryMount
-}: Props) {
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (event: MouseEvent) => { if (!profile.current?.contains(event.target as Node)) setMenuOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [menuOpen]);
+
+  const known = usagePercent !== null;
   return (
-    <aside className="rail" aria-label="STASH navigation">
-      {/* Brand Header */}
-      <div className="rail-brand">
-        <svg className="rail-logo-svg" viewBox="0 0 1200 300" aria-label="STASH Logo">
-          <defs>
-            <linearGradient id="rail-g" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stopColor="#38BDF8" />
-              <stop offset="100%" stopColor="#7C3AED" />
-            </linearGradient>
-          </defs>
-          <g transform="translate(15 20) scale(.255)">
-            <polygon points="298,225 429,225 315,798 184,798" fill="url(#rail-g)" />
-            <polygon points="486,225 617,225 503,798 372,798" fill="url(#rail-g)" />
-            <polygon points="577,798 714,798 675,661" fill="url(#rail-g)" />
-          </g>
-          <text x="290" y="190" fill="currentColor" fontFamily="Inter, Arial, sans-serif" fontSize="118" fontWeight="700" letterSpacing="14">
-            STASH
-          </text>
-        </svg>
+    <aside className="sidebar" aria-label="STASH navigation">
+      <div className="sidebar-brand">
+        <span className="sidebar-brand-mark" aria-hidden="true">S</span>
+        <span className="sidebar-brand-name">STASH</span>
       </div>
 
-      {/* Primary CTA */}
-      <button className="stash-primary-cta" type="button" onClick={onStash}>
-        + Stash it
+      <button className="button button-primary sidebar-stash" type="button" onClick={onStash}>
+        +&nbsp;&nbsp;Stash it
       </button>
 
-      {/* Navigation List */}
-      <nav className="nav-list">
+      <nav className="sidebar-nav">
         {NAV_ITEMS.map((item) => (
           <button
             key={item}
-            className={`nav-item ${active === item ? "is-active" : ""}`}
+            className={`sidebar-nav-item${active === item ? " is-active" : ""}`}
             type="button"
             aria-current={active === item ? "page" : undefined}
             onClick={() => onNavigate(item)}
           >
-            <span className="nav-icon">{NAV_ICONS[item]}</span>
-            <span className="nav-label">{item === "Search" ? "Search your STASH..." : item}</span>
+            <MaskIcon src={NAV_ICONS[item]} size={18} />
+            <span className="sidebar-nav-label">{item}</span>
+            {active === item && <span className="sidebar-active-mark" aria-hidden="true" />}
           </button>
         ))}
       </nav>
-      {notice && <p className="rail-notice" role="status">{notice}</p>}
-      {/* Bottom Mount, Profile & Storage Widget */}
-      <div className="rail-footer">
-        <div className="mount-widget" aria-live="polite">
-          <div className="mount-label-row">
-            <span>{mount}</span>
-          </div>
-          <button
-            type="button"
-            className="button button-primary button-sm mount-toggle"
-            onClick={onToggleMount}
-            disabled={mountBusy}
-          >
-            {mountBusy ? (mounted ? "Unmounting…" : "Mounting…") : mounted ? "Unmount STASH" : "Mount STASH"}
-          </button>
-          {mountActionError && <p className="mount-action-error">{mountActionError}</p>}
-          <button type="button" className="link-btn mount-refresh" onClick={onRetryMount}>Refresh mount status</button>
-        </div>
 
-        <div className="storage-widget">
-          <div className="storage-label-row">
-            <span>{usage}</span>
-          </div>
-          <div className="storage-track">
-            <div className="storage-fill" style={{ width: `${Math.min(100, Math.max(0, usagePercent))}%` }} />
-          </div>
-          <button type="button" className="link-btn storage-refresh" onClick={onRetryUsage}>Refresh storage status</button>
-        </div>
+      <div className="sidebar-spacer" />
 
-        <div className="user-profile-card">
-          <div className="user-avatar">{initials(username)}</div>
-          <div className="user-details">
-            <strong className="user-name">{username}</strong>
+      <button type="button" className="sidebar-storage" onClick={onRetryUsage} title="Refresh storage">
+        <span className="sidebar-storage-heading">
+          <span>Storage</span>
+          {known && <span className="sidebar-storage-percent">{Math.round(usagePercent)}%</span>}
+        </span>
+        <span className="sidebar-storage-bar" aria-hidden="true">
+          <span style={{ width: `${Math.min(100, Math.max(0, usagePercent ?? 0))}%` }} />
+        </span>
+        <span className="sidebar-storage-value">{usage}</span>
+      </button>
+
+      <div className="sidebar-profile" ref={profile}>
+        <button type="button" className="sidebar-profile-button" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>
+          <img src={avatarImage} width={30} height={30} alt="" />
+          <span className="sidebar-profile-copy">
+            <span className="sidebar-profile-name">{username}</span>
+            <span className="sidebar-profile-plan">Private beta</span>
+          </span>
+          <img src={chevronsIcon} width={14} height={14} alt="" />
+        </button>
+        {menuOpen && (
+          <div className="sidebar-profile-menu" role="menu">
+            <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onSignOut(); }}>Sign out</button>
           </div>
-          <button type="button" className="signout-icon-btn" onClick={onSignOut} title="Sign out" aria-label="Sign out">
-            <LogOutIcon size={16} />
-          </button>
-        </div>
+        )}
+        {signOutError && <p className="sidebar-error" role="alert">{signOutError}</p>}
       </div>
     </aside>
   );
