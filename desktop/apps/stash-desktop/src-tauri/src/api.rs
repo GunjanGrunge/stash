@@ -155,6 +155,12 @@ pub async fn list_children(folder_id: String) -> Result<Value, String> {
     get_json(&format!("/folders/{folder_id}/children")).await
 }
 
+/// The caller's Stashes, most recent first (Recent Stashes).
+#[tauri::command]
+pub async fn list_stashes() -> Result<Value, String> {
+    get_json("/stashes?limit=25").await
+}
+
 #[tauri::command]
 pub async fn get_usage() -> Result<Value, String> {
     get_json("/me/usage").await

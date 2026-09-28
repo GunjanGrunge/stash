@@ -20,8 +20,9 @@ test("source review and transfer UI preserve honest phases without fake completi
   assert.match(screen, /names and folders kept exactly as they are/);
   assert.match(screen, /Cancel Stash/);
   assert.match(screen, /transfer && transfer\.phase === "Stashed"/);
-  assert.match(home, /History is not connected/);
-  assert.match(home, /Offline files and cache controls remain unavailable/);
+  // Home shows the real Stash history and real (zero) cache figures, never samples.
+  assert.match(home, /gateway\.library\.listStashes\(\)/);
+  assert.match(home, /label="Local cache" icon=\{hardDriveIcon\} value="0 B"/);
   assert.match(shell, /initialScreen = "Home"/);
 });
 

@@ -70,7 +70,20 @@ export function createPreviewGateway(): DesktopGateway {
       mountStash: async () => { mounted = true; return mount(); },
       unmountStash: async () => { mounted = false; return mount(); },
       search: async (query) => search(query),
+      storageBreakdown: async () => ({ kinds: [
+        { kind: "video", bytes: 286 * 1024 ** 3, files: 2_104 },
+        { kind: "audio", bytes: 174 * 1024 ** 3, files: 31_870 },
+        { kind: "document", bytes: 82 * 1024 ** 3, files: 1_412 },
+        { kind: "image", bytes: 48 * 1024 ** 3, files: 2_730 },
+        { kind: "other", bytes: 34 * 1024 ** 3, files: 296 },
+      ], indexedFiles: 38_412, truncated: false }),
+      listStashes: async () => [
+        { stashId: "st1", state: "completed", fileCount: 43, committedCount: 43, committedBytes: 28.4 * 1024 ** 3, startedAt: new Date(Date.now() - 42 * 60_000).toISOString(), updatedAt: new Date().toISOString(), name: "Nocturne delivery masters" },
+        { stashId: "st2", state: "completed", fileCount: 1_847, committedCount: 1_847, committedBytes: 4.2 * 1024 ** 3, startedAt: new Date(Date.now() - 26 * 3_600_000).toISOString(), updatedAt: new Date().toISOString(), name: "KSHMR Vol 5" },
+        { stashId: "st3", state: "cancelled", fileCount: 12, committedCount: 3, committedBytes: 90 * 1024 ** 2, startedAt: new Date(Date.now() - 3 * 86_400_000).toISOString(), updatedAt: new Date().toISOString(), name: null },
+      ],
     },
+    device: { info: async () => ({ name: "GUNJAN-PC", os: "Windows", appVersion: "0.1.0" }) },
     stash: {
       selectSource: async () => summary,
       confirm: async () => ({ ...idle, phase: "Stashing", sourceName: summary.sourceName, fileCount: 43, completedFileCount: 18, totalBytes: summary.totalBytes, completedBytes: 11_900_000_000 }),

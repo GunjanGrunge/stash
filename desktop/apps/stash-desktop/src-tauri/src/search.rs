@@ -206,10 +206,62 @@ pub async fn search_stash(
     Ok(run_query(&index, &query, truncated))
 }
 
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct KindTotal {
+    pub kind: &'static str,
+    pub bytes: u64,
+    pub files: usize,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageBreakdown {
+    pub kinds: Vec<KindTotal>,
+    pub indexed_files: usize,
+    pub truncated: bool,
+}
+
+pub(crate) fn breakdown(index: &SearchIndex, truncated: bool) -> StorageBreakdown {
+    let mut kinds: Vec<KindTotal> = index
+        .kind_totals()
+        .into_iter()
+        .map(|(kind, bytes, files)| KindTotal { kind: kind_label(Some(kind)), bytes, files })
+        .collect();
+    kinds.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    StorageBreakdown { kinds, indexed_files: index.len(), truncated }
+}
+
+/// Bytes per media kind across the user's committed files, from the same
+/// on-device index search uses (so it costs no extra requests while fresh).
+#[tauri::command]
+pub async fn storage_breakdown(
+    refresh: Option<bool>,
+    state: tauri::State<'_, SearchController>,
+) -> Result<StorageBreakdown, String> {
+    let (index, truncated) = match state.fresh(refresh.unwrap_or(false)) {
+        Some(found) => found,
+        None => {
+            let (docs, truncated) = crawl().await?;
+            (state.store(SearchIndex::build(docs), truncated), truncated)
+        }
+    };
+    Ok(breakdown(&index, truncated))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn breakdown_groups_by_kind_largest_first() {
+        let doc = |id: &str, path: &str, size| SearchDoc { file_id: id.into(), name: path.into(), path: path.into(), size_bytes: size };
+        let index = SearchIndex::build(vec![doc("a", "a.wav", 10), doc("b", "b.mov", 30), doc("c", "c.wav", 5)]);
+        let b = breakdown(&index, false);
+        assert_eq!(b.indexed_files, 3);
+        assert_eq!(b.kinds, vec![KindTotal { kind: "video", bytes: 30, files: 1 }, KindTotal { kind: "audio", bytes: 15, files: 2 }]);
+    }
 
     #[test]
     fn listing_keeps_only_committed_files_and_active_folders() {

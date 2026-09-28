@@ -1,10 +1,10 @@
-import type { AuthOutcome, ChildItem, MountStatus, NativeDropNotice, RestoreOutcome, SearchHit, SearchKind, SearchResponse, SourceSummary, TransferStatus, Usage } from "../../domain/types";
+import type { AuthOutcome, ChildItem, DeviceInfo, KindTotal, MountStatus, NativeDropNotice, RestoreOutcome, SearchHit, SearchKind, SearchResponse, SourceSummary, StashSummary, StorageBreakdown, TransferStatus, Usage } from "../../domain/types";
 import type { DesktopGateway, WindowAction } from "../contracts";
 
 type Invoke = <T>(command: AllowedCommand, args?: Record<string, unknown>) => Promise<T>;
 type TauriWindow = { minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void>; startDragging(): Promise<void> };
 type TauriGlobals = { core?: { invoke?: Invoke }; window?: { getCurrentWindow?: () => TauriWindow }; event?: { listen?: <T>(name: string, handler: (event: { payload: T }) => void) => Promise<() => void> } };
-type AllowedCommand = "sign_in" | "complete_new_password" | "restore_session" | "sign_out" | "list_children" | "get_usage" | "create_folder" | "trash_folder" | "mount_status" | "mount_stash" | "unmount_stash" | "select_stash_source" | "confirm_stash" | "get_transfer_status" | "cancel_stash" | "search_stash";
+type AllowedCommand = "sign_in" | "complete_new_password" | "restore_session" | "sign_out" | "list_children" | "get_usage" | "create_folder" | "trash_folder" | "mount_status" | "mount_stash" | "unmount_stash" | "select_stash_source" | "confirm_stash" | "get_transfer_status" | "cancel_stash" | "search_stash" | "storage_breakdown" | "device_info" | "list_stashes";
 type RecordValue = Record<string, unknown>;
 
 const getTauri = (): TauriGlobals | undefined => (globalThis as typeof globalThis & { __TAURI__?: TauriGlobals }).__TAURI__;
@@ -127,6 +127,36 @@ export function searchResponse(value: unknown): SearchResponse {
   return { hits: value.hits.map(searchHit).filter((h): h is SearchHit => h !== undefined), total: value.total as number, unsupported, indexedFiles: value.indexedFiles as number, truncated: value.truncated === true };
 }
 
+export function storageBreakdown(value: unknown): StorageBreakdown {
+  if (!isRecord(value) || !Array.isArray(value.kinds) || optionalCount(value.indexedFiles) === null) throw new Error("STASH returned an invalid storage breakdown.");
+  const kinds = value.kinds.flatMap((entry): KindTotal[] => {
+    if (!isRecord(entry) || !SEARCH_KINDS.includes(entry.kind as SearchKind)) return [];
+    const bytes = optionalCount(entry.bytes);
+    const files = optionalCount(entry.files);
+    return bytes === null || files === null ? [] : [{ kind: entry.kind as SearchKind, bytes, files }];
+  });
+  return { kinds, indexedFiles: value.indexedFiles as number, truncated: value.truncated === true };
+}
+const STASH_STATES = ["open", "completed", "cancelled"] as const;
+export function stashList(value: unknown): StashSummary[] {
+  if (!isRecord(value) || !Array.isArray(value.stashes)) throw new Error("STASH returned an invalid Stash history.");
+  return value.stashes.flatMap((entry): StashSummary[] => {
+    if (!isRecord(entry)) return [];
+    const stashId = safeId(entry.stashId);
+    const state = STASH_STATES.find((s) => s === entry.state);
+    const fileCount = optionalCount(entry.fileCount);
+    const committedCount = optionalCount(entry.committedCount);
+    const committedBytes = optionalCount(entry.committedBytes);
+    const startedAt = safeText(entry.startedAt, 40);
+    if (!stashId || !state || fileCount === null || committedCount === null || committedBytes === null || !startedAt) return [];
+    return [{ stashId, state, fileCount, committedCount, committedBytes, startedAt, updatedAt: safeText(entry.updatedAt, 40) ?? startedAt, name: safeText(entry.name, 1024) ?? null }];
+  });
+}
+export function deviceInfo(value: unknown): DeviceInfo {
+  if (!isRecord(value)) throw new Error("STASH returned invalid device details.");
+  return { name: safeText(value.name, 64) ?? "This computer", os: safeText(value.os, 16) ?? "Windows", appVersion: safeText(value.appVersion, 32) ?? "" };
+}
+
 export function createTauriGateway(): DesktopGateway {
   const tauri = getTauri();
   const invoke = tauri?.core?.invoke;
@@ -166,7 +196,8 @@ export function createTauriGateway(): DesktopGateway {
     kind: "tauri",
     window: { act: (action) => windowActions[action](), startDragging: () => appWindow.startDragging() },
     auth: { signIn, completeNewPassword, clearPendingChallenge, restoreSession: async () => { clearPendingChallenge(); try { return await call("restore_session", undefined, restoreOutcome); } catch (error) { clearPendingChallenge(); throw error; } }, signOut: async () => { clearPendingChallenge(); await call("sign_out", undefined, () => undefined); } },
-    library: { listChildren: (folderId) => call("list_children", { folderId: validFolderId(folderId) }, childList), createFolder: (name, parentFolderId) => call("create_folder", { name, parentFolderId: validFolderId(parentFolderId) }, childItem), trashFolder: async (folderId) => { await call("trash_folder", { folderId: validFolderId(folderId) }, () => undefined); }, getUsage: () => call("get_usage", undefined, usage), mountStatus: () => call("mount_status", undefined, mountStatus), mountStash: () => call("mount_stash", undefined, mountStatus), unmountStash: () => call("unmount_stash", undefined, mountStatus), search: (query, refresh = false) => call("search_stash", { query: query.slice(0, 200), refresh }, searchResponse) },
+    library: { listChildren: (folderId) => call("list_children", { folderId: validFolderId(folderId) }, childList), createFolder: (name, parentFolderId) => call("create_folder", { name, parentFolderId: validFolderId(parentFolderId) }, childItem), trashFolder: async (folderId) => { await call("trash_folder", { folderId: validFolderId(folderId) }, () => undefined); }, getUsage: () => call("get_usage", undefined, usage), mountStatus: () => call("mount_status", undefined, mountStatus), mountStash: () => call("mount_stash", undefined, mountStatus), unmountStash: () => call("unmount_stash", undefined, mountStatus), search: (query, refresh = false) => call("search_stash", { query: query.slice(0, 200), refresh }, searchResponse), storageBreakdown: (refresh = false) => call("storage_breakdown", { refresh }, storageBreakdown), listStashes: () => call("list_stashes", undefined, stashList) },
+    device: { info: () => call("device_info", undefined, deviceInfo) },
     stash: {
       selectSource: (kind, start) => call("select_stash_source", { kind, start: start && ["desktop", "downloads", "documents"].includes(start) ? start : null }, sourceSummary),
       confirm: () => call("confirm_stash", undefined, transferStatus),
@@ -183,6 +214,6 @@ export function createTauriGateway(): DesktopGateway {
 
 export function createUnavailableGateway(): DesktopGateway {
   const unavailable = async () => { throw new Error("Desktop connection is unavailable in this build."); };
-  return { kind: "unavailable", window: { act: unavailable, startDragging: unavailable }, auth: { signIn: unavailable, completeNewPassword: unavailable, clearPendingChallenge: () => undefined, restoreSession: async () => ({ outcome: "SignedOut" }), signOut: unavailable }, library: { listChildren: unavailable, createFolder: unavailable, trashFolder: unavailable, getUsage: unavailable, mountStatus: unavailable, mountStash: unavailable, unmountStash: unavailable, search: unavailable }, stash: { selectSource: unavailable, confirm: unavailable, status: unavailable, cancel: unavailable, onNativeDrop: async () => () => undefined }, unavailable: (capability) => `${capabilityLabel(capability)} is available in the desktop app when its backend capability is implemented.` } as DesktopGateway;
+  return { kind: "unavailable", window: { act: unavailable, startDragging: unavailable }, auth: { signIn: unavailable, completeNewPassword: unavailable, clearPendingChallenge: () => undefined, restoreSession: async () => ({ outcome: "SignedOut" }), signOut: unavailable }, library: { listChildren: unavailable, createFolder: unavailable, trashFolder: unavailable, getUsage: unavailable, mountStatus: unavailable, mountStash: unavailable, unmountStash: unavailable, search: unavailable, storageBreakdown: unavailable, listStashes: unavailable }, device: { info: unavailable }, stash: { selectSource: unavailable, confirm: unavailable, status: unavailable, cancel: unavailable, onNativeDrop: async () => () => undefined }, unavailable: (capability) => `${capabilityLabel(capability)} is available in the desktop app when its backend capability is implemented.` } as DesktopGateway;
 }
 function capabilityLabel(capability: Parameters<DesktopGateway["unavailable"]>[0]): string { return { home: "Home summaries", search: "Search", "stash-it": "Stash It", "recent-stashes": "Recent Stashes", offline: "Offline files", transfers: "Transfers", settings: "Settings" }[capability]; }

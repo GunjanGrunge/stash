@@ -20,6 +20,8 @@ export interface StashRecord {
   committedCount: number;
   reservedBytes: number;
   committedBytes: number;
+  /** The top-level folder this Stash was rooted at; absent on older Stashes. */
+  manifestFolderName?: string;
   startedAt: string;
   updatedAt: string;
 }

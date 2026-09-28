@@ -90,10 +90,20 @@ describe("listStashes — Recent Stashes", () => {
       committedBytes: 1024,
       startedAt: "2026-09-14T10:00:00.000Z",
       updatedAt: "2026-09-14T11:00:00.000Z",
+      name: null,
     });
     // pk/sk are key material: they must never cross the wire.
     expect(res_keys(item)).not.toContain("pk");
     expect(res_keys(item)).not.toContain("sk");
+  });
+
+  it("returns the Stash's folder name so Recent Stashes can show it", async () => {
+    const repo = new MemoryReadRepository();
+    repo.seedStash(stash(USER, "s-1", "2026-09-14T10:00:00.000Z", { manifestFolderName: "KSHMR Vol 5" }));
+
+    const [item] = body(await listStashes({ repo })(listEvent())).stashes;
+
+    expect(item.name).toBe("KSHMR Vol 5");
   });
 
   it("returns an empty list for a creator with no Stashes yet", async () => {

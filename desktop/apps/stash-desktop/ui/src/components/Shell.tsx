@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { CapabilityState, MountStatus, NativeDropNotice, SourceSummary, TransferStatus, Usage } from "../domain/types";
+import type { CapabilityState, DeviceInfo, MountStatus, NativeDropNotice, SourceSummary, TransferStatus, Usage } from "../domain/types";
 import type { DesktopGateway } from "../platform/contracts";
 import { safeActionError } from "../platform/tauri/gateway";
 import { FilesScreen, formatBytes } from "./FilesScreen";
@@ -7,7 +7,7 @@ import { HomeScreen } from "./HomeScreen";
 import { NavigationRail, type NavItem } from "./NavigationRail";
 import { OfflineScreen } from "./OfflineScreen";
 import { SearchScreen } from "./SearchScreen";
-import { SettingsScreen } from "./SettingsScreen";
+import { SettingsScreen, type SettingsSection } from "./SettingsScreen";
 import { StashItScreen } from "./StashItScreen";
 import { TopBar } from "./TopBar";
 import { TransfersScreen } from "./TransfersScreen";
@@ -21,10 +21,11 @@ type Props = {
   /** Starting screen; the app always starts on Home. Used by the dev screen preview. */
   initialScreen?: NavItem;
   initialStashOpen?: boolean;
+  initialSettingsSection?: SettingsSection;
 };
 
 /** Figma frame: 232px sidebar, then a 72px top bar over the active screen. */
-export function Shell({ gateway, username, onSignOut, signOutError = "", initialScreen = "Home", initialStashOpen = false }: Props) {
+export function Shell({ gateway, username, onSignOut, signOutError = "", initialScreen = "Home", initialStashOpen = false, initialSettingsSection = "General" }: Props) {
   const [active, setActive] = useState<NavItem>(initialScreen);
   const [usage, setUsage] = useState<CapabilityState<Usage>>({ status: "loading" });
   const [mount, setMount] = useState<CapabilityState<MountStatus>>({ status: "loading" });
@@ -36,6 +37,10 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
   const [dragOver, setDragOver] = useState(false);
   const [droppedSource, setDroppedSource] = useState<SourceSummary>();
   const [searchQuery, setSearchQuery] = useState({ text: "", at: 0 });
+  const [device, setDevice] = useState<DeviceInfo>({ name: "This computer", os: "Windows", appVersion: "" });
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>(initialSettingsSection);
+
+  useEffect(() => { void gateway.device.info().then(setDevice).catch(() => undefined); }, [gateway]);
 
   const loadUsage = () => {
     // Keep showing the last known usage while it refreshes.
@@ -74,6 +79,8 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
   const usageText = usageReady ? `${formatBytes(usage.data.usedBytes)} of ${formatBytes(usage.data.quotaBytes)}` : usage.status === "offline" ? (usage.message || "Storage unavailable") : "Loading storage…";
   const usagePercent = usageReady && usage.data.quotaBytes ? ((usage.data.usedBytes ?? 0) / usage.data.quotaBytes) * 100 : null;
   const mounted = (mount.status === "ready" || mount.status === "stale") && mount.data.mounted;
+  // Online = this PC reached the STASH API for storage usage.
+  const online = usage.status !== "offline";
   const mountText = mount.status === "ready" || mount.status === "stale" ? (mount.data.mounted ? `${mount.data.letter ?? "S"}: mounted` : "Mount S:") : mount.status === "offline" ? (mount.message || "Mount unavailable") : "Checking drive…";
 
   const toggleMount = () => {
@@ -91,6 +98,7 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
   const openStash = useCallback(() => { setNotice(""); setDroppedSource(undefined); setStashOpen(true); }, []);
   const navigate = (item: NavItem) => {
     setStashOpen(false);
+    if (item === "Settings") setSettingsSection("General");
     setActive(item);
     setNotice(item === "Recent Stashes" ? gateway.unavailable("recent-stashes") : "");
   };
@@ -103,14 +111,18 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
   if (active === "Home") {
     mainContent = (
       <HomeScreen
-        username={username}
-        usage={usageText}
-        mount={mountText}
-        onStashIt={openStash}
-        onOpenFiles={() => setActive("Files")}
-        onUnavailable={unavailable}
+        gateway={gateway}
+        usage={usageReady ? usage.data : null}
+        device={device}
+        online={online}
+        mounted={mounted}
         transfer={transfer}
         dragOver={dragOver}
+        onStashIt={openStash}
+        onOpenFiles={() => setActive("Files")}
+        onOpenRecent={() => setActive("Recent Stashes")}
+        onOpenTransfers={() => setActive("Transfers")}
+        onManageDevices={() => { setSettingsSection("Devices"); setActive("Settings"); }}
       />
     );
   } else if (active === "Files") {
@@ -120,11 +132,11 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
   } else if (active === "Recent Stashes") {
     mainContent = <UnavailableScreen title="Recent Stashes" message="Recent Stashes is not connected in this build yet. STASH will not invent or reuse another view for this destination." notice={notice} />;
   } else if (active === "Transfers") {
-    mainContent = <TransfersScreen />;
+    mainContent = <TransfersScreen gateway={gateway} deviceName={device.name} onStashIt={openStash} onOpenFiles={() => setActive("Files")} />;
   } else if (active === "Offline") {
-    mainContent = <OfflineScreen />;
+    mainContent = <OfflineScreen deviceName={device.name} onManageCache={() => { setSettingsSection("Storage & cache"); setActive("Settings"); }} onOpenFiles={() => setActive("Files")} />;
   } else if (active === "Settings") {
-    mainContent = <SettingsScreen username={username} />;
+    mainContent = <SettingsScreen key={settingsSection} gateway={gateway} username={username} device={device} online={online} usage={usageReady ? usage.data : null} mounted={mounted} mountBusy={mountBusy} onToggleMount={toggleMount} onSignOut={onSignOut} initialSection={settingsSection} />;
   }
 
   return (
@@ -141,7 +153,7 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
         signOutError={signOutError}
       />
       <div className="app-workspace">
-        <TopBar onSearch={search} mounted={mounted} mountBusy={mountBusy} mountText={mountText} mountActionError={mountActionError} onToggleMount={toggleMount} />
+        <TopBar onSearch={search} deviceName={device.name} online={online} mounted={mounted} mountBusy={mountBusy} mountText={mountText} mountActionError={mountActionError} onToggleMount={toggleMount} />
         {notice && active !== "Recent Stashes" && <p className="app-notice" role="status">{notice}</p>}
         <div className="app-screen">
           {stashOpen

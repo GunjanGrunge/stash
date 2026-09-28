@@ -4,6 +4,7 @@
 
 mod api;
 mod auth;
+mod device;
 mod mount;
 mod search;
 mod upload;
@@ -184,9 +185,12 @@ pub fn run() {
             auth::sign_out,
             api::list_children,
             api::get_usage,
+            api::list_stashes,
             api::create_folder,
             api::trash_folder,
             search::search_stash,
+            search::storage_breakdown,
+            device::device_info,
             mount::mount_status,
             mount::mount_stash,
             mount::unmount_stash,

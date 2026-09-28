@@ -10,7 +10,9 @@ import "@fontsource/inter/700.css";
 import "@fontsource/inter/800.css";
 import "@fontsource/roboto-mono/400.css";
 import "../src/styles.css";
+import "../src/figma-screens.css";
 import { Shell } from "../src/components/Shell";
+import type { SettingsSection } from "../src/components/SettingsScreen";
 import { NAV_ITEMS } from "../src/components/NavigationRail";
 import { TitleBar } from "../src/components/TitleBar";
 import { WelcomeScreen } from "../src/components/WelcomeScreen";
@@ -31,7 +33,7 @@ function Preview() {
       <TitleBar gateway={gateway} />
       {params.get("view") === "welcome"
         ? <WelcomeScreen gateway={gateway} state={auth} dispatch={dispatch} />
-        : <Shell gateway={gateway} username="Maya Chen" onSignOut={() => undefined} initialScreen={screen} initialStashOpen={params.get("stash") === "1"} />}
+        : <Shell gateway={gateway} username="Maya Chen" onSignOut={() => undefined} initialScreen={screen} initialStashOpen={params.get("stash") === "1"} initialSettingsSection={(params.get("section") ?? "General") as SettingsSection} />}
     </div>
   );
 }
