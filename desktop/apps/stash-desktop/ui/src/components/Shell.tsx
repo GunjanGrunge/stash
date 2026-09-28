@@ -17,16 +17,19 @@ type Props = {
   username: string;
   onSignOut: () => void;
   signOutError?: string;
+  /** Starting screen; the app always starts on Home. Used by the dev screen preview. */
+  initialScreen?: NavItem;
+  initialStashOpen?: boolean;
 };
 
 type NavItem = typeof NAV_ITEMS[number];
 
-export function Shell({ gateway, username, onSignOut, signOutError = "" }: Props) {
-  const [active, setActive] = useState<NavItem>("Home");
+export function Shell({ gateway, username, onSignOut, signOutError = "", initialScreen = "Home", initialStashOpen = false }: Props) {
+  const [active, setActive] = useState<NavItem>(initialScreen);
   const [usage, setUsage] = useState<CapabilityState<Usage>>({ status: "loading" });
   const [mount, setMount] = useState<CapabilityState<MountStatus>>({ status: "loading" });
   const [transfer, setTransfer] = useState<TransferStatus>();
-  const [stashOpen, setStashOpen] = useState(false);
+  const [stashOpen, setStashOpen] = useState(initialStashOpen);
   const [notice, setNotice] = useState("");
   const [mountBusy, setMountBusy] = useState(false);
   const [mountActionError, setMountActionError] = useState("");
