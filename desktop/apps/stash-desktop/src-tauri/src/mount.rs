@@ -41,10 +41,14 @@ struct MountWriteSink {
 
 impl WriteSink for MountWriteSink {
     fn begin(&self, name: &[u16]) -> Result<WriteSpool, String> {
+        #[cfg(debug_assertions)]
+        eprintln!("[stash-mount] begin write spool for {} UTF-16 units", name.len());
         WriteSpool::create_for_mount(name)
     }
 
     fn submit(&self, spool: WriteSpool) -> Result<(), String> {
+        #[cfg(debug_assertions)]
+        eprintln!("[stash-mount] submit completed write spool");
         match self.uploads.submit_mount_spool(spool) {
             Ok(()) => Ok(()),
             Err(error) => {

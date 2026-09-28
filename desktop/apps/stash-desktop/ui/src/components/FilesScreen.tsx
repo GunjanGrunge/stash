@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { CapabilityState, ChildItem, FolderLocation, MountStatus, SortDirection, SortKey, Usage } from "../domain/types";
 import type { DesktopGateway } from "../platform/contracts";
 import { safeActionError } from "../platform/tauri/gateway";
-import { FileIcon, FolderIcon } from "./icons";
 
 export function formatBytes(value?: number | null): string {
   if (value == null || !Number.isFinite(value)) return "—";
@@ -14,24 +13,44 @@ export function formatBytes(value?: number | null): string {
   return `${amount.toFixed(amount >= 10 ? 0 : 1)} ${units[unit]}`;
 }
 
-const kindOf = (item: ChildItem) => (item.entity === "FOLDER" ? "Folder" : "File");
+const kindOf = (item: ChildItem) => item.entity === "FOLDER" ? "Folder" : "File";
 
-export function FilesScreen({ gateway, onUsage, onMount }: { gateway: DesktopGateway; onUsage: (usage: Usage) => void; onMount: (status: MountStatus) => void }) {
+const mediaKindOf = (item: ChildItem): string =>
+  item.entity === "FOLDER" ? "Folder"
+  : item.name.endsWith(".wav") || item.name.endsWith(".mp3") ? "Audio"
+  : item.name.endsWith(".mp4") || item.name.endsWith(".mov") ? "Video"
+  : item.name.endsWith(".pdf") || item.name.endsWith(".doc") ? "Document"
+  : "File";
+
+const iconFor = (item: ChildItem): string =>
+  item.entity === "FOLDER" ? "📁"
+  : item.name.endsWith(".wav") || item.name.endsWith(".mp3") ? "🎵"
+  : item.name.endsWith(".mp4") || item.name.endsWith(".mov") ? "📹"
+  : "📄";
+
+export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: DesktopGateway; onUsage: (usage: Usage) => void; onMount: (status: MountStatus) => void; onStash: () => void }) {
   const [folderId, setFolderId] = useState("ROOT");
   const [path, setPath] = useState<FolderLocation[]>([]);
   const [filesState, setFilesState] = useState<CapabilityState<ChildItem[]>>({ status: "loading" });
   const [selected, setSelected] = useState<ChildItem | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedType, setSelectedType] = useState<string>("All");
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({ key: "name", direction: "ascending" });
   const [isPlaying, setIsPlaying] = useState(false);
+  const [showNewFolderModal, setShowNewFolderModal] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [folderError, setFolderError] = useState("");
-  const [confirmTrashFolder, setConfirmTrashFolder] = useState(false);
+  const [confirmTrash, setConfirmTrash] = useState<ChildItem | null>(null);
   const [trashingFolder, setTrashingFolder] = useState(false);
+  const [isFavorite, setIsFavorite] = useState(false);
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagDraft, setTagDraft] = useState("");
 
   const loadChildren = () => {
     setFilesState({ status: "loading" });
     setSelected(null);
+    setConfirmTrash(null);
     void gateway.library.listChildren(folderId).then((result) => {
       const itemsList = Array.isArray(result.items) ? result.items : [];
       setFilesState({ status: "ready", data: itemsList });
@@ -45,14 +64,28 @@ export function FilesScreen({ gateway, onUsage, onMount }: { gateway: DesktopGat
   }, [folderId, gateway]);
 
   const items = filesState.status === "ready" || filesState.status === "stale" ? (filesState.data ?? []) : [];
-  const sortedItems = useMemo(() => [...items].sort((left, right) => {
+
+  const filteredItems = useMemo(() => {
+    return items.filter((item) => {
+      const matchesSearch = searchQuery === "" || item.name.toLowerCase().includes(searchQuery.toLowerCase());
+      if (!matchesSearch) return false;
+      if (selectedType === "Audio") return item.name.endsWith(".wav") || item.name.endsWith(".mp3");
+      if (selectedType === "Video") return item.name.endsWith(".mp4") || item.name.endsWith(".mov");
+      if (selectedType === "Documents") return item.name.endsWith(".pdf") || item.name.endsWith(".doc");
+      if (selectedType === "Folders") return item.entity === "FOLDER";
+      return true;
+    });
+  }, [items, searchQuery, selectedType]);
+
+  const sortedItems = useMemo(() => [...filteredItems].sort((left, right) => {
     const a = sort.key === "size" ? left.sizeBytes ?? 0 : sort.key === "kind" ? kindOf(left) : left.name;
     const b = sort.key === "size" ? right.sizeBytes ?? 0 : sort.key === "kind" ? kindOf(right) : right.name;
     const result = a < b ? -1 : a > b ? 1 : 0;
     return sort.direction === "ascending" ? result : -result;
-  }), [items, sort]);
+  }), [filteredItems, sort]);
 
   const toggleSort = (key: SortKey) => setSort((current) => current.key === key ? { key, direction: current.direction === "ascending" ? "descending" : "ascending" } : { key, direction: "ascending" });
+
   const createFolder = async () => {
     const name = newFolderName.trim();
     if (!name) return;
@@ -61,6 +94,7 @@ export function FilesScreen({ gateway, onUsage, onMount }: { gateway: DesktopGat
     try {
       await gateway.library.createFolder(name, folderId);
       setNewFolderName("");
+      setShowNewFolderModal(false);
       loadChildren();
     } catch (error) {
       setFolderError(safeActionError(error, "STASH couldn't create that folder."));
@@ -68,21 +102,16 @@ export function FilesScreen({ gateway, onUsage, onMount }: { gateway: DesktopGat
       setCreatingFolder(false);
     }
   };
-  const openFolder = (item: ChildItem) => {
-    const id = item.folderId;
-    if (kindOf(item) !== "Folder" || !id) return;
-    setFolderId(id);
-    setConfirmTrashFolder(false);
-    setPath((current) => [...current, { id, name: item.name }]);
-  };
-  const trashSelectedFolder = async () => {
-    if (!selected?.folderId || selected.entity !== "FOLDER") return;
+
+  const trashFolder = async () => {
+    const target = confirmTrash;
+    if (!target?.folderId) return;
     setTrashingFolder(true);
     setFolderError("");
     try {
-      await gateway.library.trashFolder(selected.folderId);
-      setSelected(null);
-      setConfirmTrashFolder(false);
+      await gateway.library.trashFolder(target.folderId);
+      if (selected === target) setSelected(null);
+      setConfirmTrash(null);
       loadChildren();
     } catch (error) {
       setFolderError(safeActionError(error, "STASH couldn't move that folder to Trash."));
@@ -90,9 +119,37 @@ export function FilesScreen({ gateway, onUsage, onMount }: { gateway: DesktopGat
       setTrashingFolder(false);
     }
   };
+
+  const openFolder = (item: ChildItem) => {
+    const id = item.folderId;
+    if (kindOf(item) !== "Folder" || !id) return;
+    setFolderId(id);
+    setPath((current) => [...current, { id, name: item.name }]);
+  };
+
   const goTo = (location: FolderLocation | null, index: number) => {
     setFolderId(location?.id ?? "ROOT");
     setPath(index < 0 ? [] : path.slice(0, index + 1));
+  };
+
+  const selectItem = (item: ChildItem) => {
+    setSelected(item);
+    setIsPlaying(false);
+    setIsFavorite(false);
+    setTags([]);
+    setTagDraft("");
+  };
+
+  const addTag = () => {
+    const tag = tagDraft.trim();
+    setTagDraft("");
+    if (!tag || tags.includes(tag)) return;
+    setTags((current) => [...current, tag]);
+  };
+
+  const handleCreateFolder = (e: FormEvent) => {
+    e.preventDefault();
+    void createFolder();
   };
 
   return (
@@ -102,38 +159,73 @@ export function FilesScreen({ gateway, onUsage, onMount }: { gateway: DesktopGat
           <p className="eyebrow">Library</p>
           <h1 id="files-heading">Your files</h1>
           <nav className="breadcrumb" aria-label="Breadcrumb">
-            <button type="button" onClick={() => goTo(null, -1)}>Files</button>
-            {path.map((folder, index) => (
-              <span key={`${folder.id}-${index}`}>
-                &nbsp;&rsaquo;&nbsp;<button type="button" onClick={() => goTo(folder, index)}>{folder.name}</button>
+            <button type="button" onClick={() => goTo(null, -1)}>Library</button>
+            {path.map((location, index) => (
+              <span key={`${location.id}-${index}`}>
+                &rsaquo; <button type="button" onClick={() => goTo(location, index)}>{location.name}</button>
               </span>
             ))}
           </nav>
         </div>
 
         <div className="workspace-actions">
-          <label className="visually-hidden" htmlFor="new-folder-name">New folder name</label>
-          <input id="new-folder-name" value={newFolderName} maxLength={255} onChange={(event) => setNewFolderName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createFolder(); }} placeholder="New folder" className="new-folder-input" />
-          <button className="button button-secondary" type="button" disabled={creatingFolder || !newFolderName.trim()} onClick={() => void createFolder()}>{creatingFolder ? "Creating…" : "New folder"}</button>
-          <input type="search" placeholder="Search your STASH... ⌘K" className="search-input" />
+          <button type="button" className="button button-primary" onClick={onStash}>
+            + Upload Files
+          </button>
+          <button type="button" className="button button-secondary" onClick={() => { setFolderError(""); setShowNewFolderModal(true); }}>
+            + New Folder
+          </button>
+          <input
+            type="search"
+            placeholder="Search files... ⌘K"
+            className="search-input"
+            aria-label="Search files"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
         </div>
       </header>
 
-      {folderError && <div className="status-banner banner-warning" role="alert">{folderError}</div>}
+      {folderError && !showNewFolderModal && <div className="status-banner banner-warning" role="alert">{folderError}</div>}
 
       {filesState.status === "stale" && (
-        <div className="status-banner banner-warning">Data may be stale</div>
+        <div className="status-banner banner-warning">Data may be stale. Reconnect to refresh.</div>
       )}
 
+      {confirmTrash && (
+        <div className="status-banner banner-warning" role="alert">
+          <span>Move <strong>{confirmTrash.name}</strong> and everything inside it to Trash? It can be restored for 30 days.</span>
+          <span className="banner-actions">
+            <button type="button" className="button button-danger button-sm" disabled={trashingFolder} onClick={() => void trashFolder()}>
+              {trashingFolder ? "Moving…" : "Move to Trash"}
+            </button>
+            <button type="button" className="button button-secondary button-sm" disabled={trashingFolder} onClick={() => setConfirmTrash(null)}>Cancel</button>
+          </span>
+        </div>
+      )}
+
+      <div className="filter-tab-bar" role="group" aria-label="Filter files by type">
+        {["All", "Audio", "Video", "Documents", "Folders"].map((type) => (
+          <button
+            key={type}
+            className={`tab-btn ${selectedType === type ? "is-active" : ""}`}
+            type="button"
+            aria-pressed={selectedType === type}
+            onClick={() => setSelectedType(type)}
+          >
+            {type}
+          </button>
+        ))}
+      </div>
+
       <div className="files-layout-grid">
-        {/* Table View */}
         <div className="file-table-wrap">
           {filesState.status === "loading" ? (
             <div className="empty-state-message">Loading your STASH…</div>
-          ) : filesState.status === "offline" ? (
+          ) : filesState.status === "offline" || filesState.status === "unavailable" ? (
             <div className="empty-state-message error-text">{filesState.message || "We couldn't load this folder. Try again."}</div>
           ) : sortedItems.length === 0 ? (
-            <div className="empty-state-message">This folder is empty.</div>
+            <div className="empty-state-message">{items.length === 0 ? "This folder is empty." : "No files match your filters."}</div>
           ) : (
             <table className="file-table">
               <thead>
@@ -141,7 +233,7 @@ export function FilesScreen({ gateway, onUsage, onMount }: { gateway: DesktopGat
                   <th scope="col"><button type="button" onClick={() => toggleSort("name")}>Name</button></th>
                   <th scope="col"><button type="button" onClick={() => toggleSort("kind")}>Type</button></th>
                   <th scope="col"><button type="button" onClick={() => toggleSort("size")}>Size</button></th>
-                  <th scope="col">State</th>
+                  <th scope="col">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -149,19 +241,30 @@ export function FilesScreen({ gateway, onUsage, onMount }: { gateway: DesktopGat
                   <tr
                     key={`${item.entity}-${item.name}-${item.fileId || item.folderId}`}
                     className={selected === item ? "is-selected" : ""}
-                    onClick={() => {
-                      setConfirmTrashFolder(false);
-                      setSelected(item);
-                      if (kindOf(item) === "Folder") openFolder(item);
-                    }}
+                    onClick={() => selectItem(item)}
+                    onDoubleClick={() => openFolder(item)}
                   >
                     <td>
-                      <span className="item-icon">{kindOf(item) === "Folder" ? <FolderIcon size={16} /> : <FileIcon size={16} />}</span>
+                      <span className="item-icon">{iconFor(item)}</span>
                       <strong>{item.name}</strong>
                     </td>
-                    <td>{kindOf(item)}</td>
+                    <td>{mediaKindOf(item)}</td>
                     <td>{kindOf(item) === "Folder" ? "—" : formatBytes(item.sizeBytes)}</td>
-                    <td>{item.state || "Synced"}</td>
+                    <td>
+                      <div className="row-actions">
+                        {item.entity === "FOLDER" && item.folderId && (
+                          <button
+                            type="button"
+                            className="icon-action-btn"
+                            title="Move folder to Trash"
+                            aria-label={`Move ${item.name} to Trash`}
+                            onClick={(e) => { e.stopPropagation(); setConfirmTrash(item); }}
+                          >
+                            🗑
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -169,52 +272,81 @@ export function FilesScreen({ gateway, onUsage, onMount }: { gateway: DesktopGat
           )}
         </div>
 
-        {/* Asset Details Preview Drawer */}
         <aside className="asset-details-drawer">
           {selected ? (
             <>
               <div className="drawer-header">
-                <span className="file-type-icon">{kindOf(selected) === "Folder" ? <FolderIcon size={24} /> : <FileIcon size={24} />}</span>
-                <h3>{selected.name}</h3>
-                <p className="drawer-sub">{kindOf(selected)} &bull; {formatBytes(selected.sizeBytes)}</p>
+                <span className="file-type-icon">{iconFor(selected)}</span>
+                <div>
+                  <h3>{selected.name}</h3>
+                  <p className="drawer-sub">{mediaKindOf(selected)} &bull; {formatBytes(selected.sizeBytes)}</p>
+                </div>
               </div>
 
-              {selected.name.endsWith(".wav") || selected.name.endsWith(".mp3") ? (
+              {(selected.name.endsWith(".wav") || selected.name.endsWith(".mp3")) && (
                 <div className="waveform-box">
-                  <div className="waveform-visualizer">
-                    <span className="bar bar-1" />
-                    <span className="bar bar-2" />
-                    <span className="bar bar-3" />
-                    <span className="bar bar-4" />
-                    <span className="bar bar-5" />
+                  <div className="waveform-visualizer" aria-hidden="true">
+                    <span className={`bar bar-1 ${isPlaying ? "animating" : ""}`} />
+                    <span className={`bar bar-2 ${isPlaying ? "animating" : ""}`} />
+                    <span className={`bar bar-3 ${isPlaying ? "animating" : ""}`} />
+                    <span className={`bar bar-4 ${isPlaying ? "animating" : ""}`} />
+                    <span className={`bar bar-5 ${isPlaying ? "animating" : ""}`} />
+                    <span className={`bar bar-6 ${isPlaying ? "animating" : ""}`} />
+                    <span className={`bar bar-7 ${isPlaying ? "animating" : ""}`} />
+                    <span className={`bar bar-8 ${isPlaying ? "animating" : ""}`} />
                   </div>
                   <div className="player-controls">
-                    <button type="button" className="play-btn" onClick={() => setIsPlaying(!isPlaying)}>
+                    <button
+                      type="button"
+                      className="play-btn"
+                      onClick={() => setIsPlaying(!isPlaying)}
+                      aria-label={isPlaying ? "Pause preview" : "Play preview"}
+                    >
                       {isPlaying ? "⏸" : "▶"}
                     </button>
                     <span className="time-display">0:00</span>
                   </div>
                 </div>
-              ) : null}
+              )}
 
               <div className="metadata-list">
                 <div className="meta-row"><span className="meta-label">Type:</span> <span>{kindOf(selected)}</span></div>
                 <div className="meta-row"><span className="meta-label">Size:</span> <span>{formatBytes(selected.sizeBytes)}</span></div>
-                {selected.originalRelativePath && (
-                  <div className="meta-row"><span className="meta-label">Path:</span> <span>{selected.originalRelativePath}</span></div>
-                )}
-              </div>
-              {selected.entity === "FOLDER" && (
-                <div className="drawer-actions">
-                  {confirmTrashFolder ? (
-                    <>
-                      <p className="drawer-warning">Move this folder and everything inside it to Trash? It can be restored for 30 days.</p>
-                      <button type="button" className="button button-danger" disabled={trashingFolder} onClick={() => void trashSelectedFolder()}>{trashingFolder ? "Movingâ€¦" : "Move to Trash"}</button>
-                      <button type="button" className="button button-secondary" disabled={trashingFolder} onClick={() => setConfirmTrashFolder(false)}>Cancel</button>
-                    </>
-                  ) : <button type="button" className="button button-secondary" onClick={() => setConfirmTrashFolder(true)}>Delete folderâ€¦</button>}
+                <div className="meta-row">
+                  <span className="meta-label">Path:</span>
+                  <span>{selected.originalRelativePath || `/${[...path.map((location) => location.name), selected.name].join("/")}`}</span>
                 </div>
-              )}
+                <div className="meta-row"><span className="meta-label">Status:</span> <span>{selected.state || "—"}</span></div>
+              </div>
+
+              <div className="tag-section">
+                <span className="meta-label">Tags:</span>
+                <div className="tag-pills">
+                  {tags.map((tag) => (
+                    <span key={tag} className="tag-pill">{tag}</span>
+                  ))}
+                  <input
+                    type="text"
+                    className="tag-input"
+                    placeholder="Add tag"
+                    aria-label="Add tag"
+                    value={tagDraft}
+                    maxLength={64}
+                    onChange={(e) => setTagDraft(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") addTag(); }}
+                  />
+                  <button type="button" className="add-tag-btn" onClick={addTag}>+ Add</button>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className={`button button-secondary fav-btn ${isFavorite ? "is-fav" : ""}`}
+                aria-pressed={isFavorite}
+                onClick={() => setIsFavorite(!isFavorite)}
+              >
+                {isFavorite ? "★ In Favorites" : "☆ Add to Favorites"}
+              </button>
             </>
           ) : (
             <div className="drawer-placeholder">
@@ -223,6 +355,36 @@ export function FilesScreen({ gateway, onUsage, onMount }: { gateway: DesktopGat
           )}
         </aside>
       </div>
+
+      {showNewFolderModal && (
+        <div className="modal-backdrop" onClick={() => setShowNewFolderModal(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="new-folder-title">
+            <h3 id="new-folder-title">Create New Folder</h3>
+            <form onSubmit={handleCreateFolder}>
+              <label className="visually-hidden" htmlFor="new-folder-name">Folder name</label>
+              <input
+                id="new-folder-name"
+                type="text"
+                placeholder="Folder name (e.g. Beats 2026)"
+                value={newFolderName}
+                maxLength={255}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                autoFocus
+                className="modal-input"
+              />
+              {folderError && <p className="modal-error" role="alert">{folderError}</p>}
+              <div className="modal-actions">
+                <button type="button" className="button button-secondary" onClick={() => setShowNewFolderModal(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className="button button-primary" disabled={creatingFolder || !newFolderName.trim()}>
+                  {creatingFolder ? "Creating…" : "Create Folder"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

@@ -70,6 +70,8 @@ export class StashRetentionStack extends cdk.Stack {
     }));
 
     this.purgeFunction = new nodejs.NodejsFunction(this, "PurgeTrash", {
+      projectRoot: repositoryRoot(),
+      depsLockFilePath: path.join(repositoryRoot(), "package-lock.json"),
       functionName: FUNCTION_NAME,
       entry: path.join(repositoryRoot(), "services", "entrypoints", "src", "purge-trash.ts"),
       handler: "handler",

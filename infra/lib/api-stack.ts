@@ -298,13 +298,13 @@ export class StashApiStack extends cdk.Stack {
     this.httpApi = new HttpApi(this, "StashHttpApi", {
       apiName: "stash-api",
       description: "STASH control plane — public, JWT-only (Addendum A2).",
-      // The default authorizer is the safety property: it applies to every
-      // route unless a route explicitly opts out, and nothing here opts out.
       defaultAuthorizer: authorizer,
     });
 
     for (const route of ROUTES) {
       const fn = new nodejs.NodejsFunction(this, constructId(route.name), {
+        projectRoot: root,
+        depsLockFilePath: path.join(root, "package-lock.json"),
         functionName: `${FUNCTION_NAME_PREFIX}${route.name}`,
         entry: path.join(root, ENTRYPOINT_DIR, `${route.name}.ts`),
         handler: "handler",
@@ -312,29 +312,17 @@ export class StashApiStack extends cdk.Stack {
         architecture: lambda.Architecture.ARM_64,
         timeout: route.timeout,
         memorySize: route.memoryMb,
-        // See StashApiStackProps.logGroups: owning the group here is what
-        // stops Lambda minting an infinite-retention one at first invocation.
         logGroup: logGroups?.[route.name],
-        // Addendum A5: the shared role. Passing a role explicitly is also what
-        // stops NodejsFunction from minting one of its own.
         role,
-        // Configuration, never request input: a table or bucket name taken
-        // from a request would let a caller point a handler at storage that is
-        // not theirs, which no amount of IAM scoping fixes afterwards.
         environment: {
           [TABLE_NAME_VAR]: table.tableName,
           [BUCKET_NAME_VAR]: bucket.bucketName,
         },
         bundling: {
-          // ESM, matching the handler packages' own module format.
           format: nodejs.OutputFormat.ESM,
           target: "node20",
           sourceMap: true,
-          // The Node 20 runtime ships AWS SDK v3, so bundling it would add
-          // megabytes to every cold start for no behavioural gain.
           externalModules: ["@aws-sdk/*", "@smithy/*"],
-          // esbuild emits `await` at top level for ESM interop shims; without
-          // this banner the CJS-style `require` shim is undefined at runtime.
           banner:
             "import{createRequire}from'module';const require=createRequire(import.meta.url);",
         },
@@ -351,8 +339,6 @@ export class StashApiStack extends cdk.Stack {
       });
     }
 
-    // `url` is optional on HttpApi only because an API with no default stage
-    // has none; this one always creates a default stage.
     this.apiUrl = this.httpApi.url ?? this.httpApi.apiEndpoint;
 
     new cdk.CfnOutput(this, "ApiUrl", {

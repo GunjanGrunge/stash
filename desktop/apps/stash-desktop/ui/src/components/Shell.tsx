@@ -106,7 +106,7 @@ export function Shell({ gateway, username, onSignOut, signOutError = "" }: Props
       />
     );
   } else if (active === "Files") {
-    mainContent = <FilesScreen gateway={gateway} onUsage={(data) => setUsage({ status: "ready", data })} onMount={(data) => setMount({ status: "ready", data })} />;
+    mainContent = <FilesScreen gateway={gateway} onUsage={(data) => setUsage({ status: "ready", data })} onMount={(data) => setMount({ status: "ready", data })} onStash={openStash} />;
   } else if (active === "Search" || active === "Favorites" || active === "Recent Stashes") {
     const title = active === "Recent Stashes" ? "Recent Stashes" : active;
     mainContent = <UnavailableScreen title={title} message={`${title} is not connected in this build yet. STASH will not invent or reuse another view for this destination.`} notice={notice} />;

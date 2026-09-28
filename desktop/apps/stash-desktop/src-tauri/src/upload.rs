@@ -147,11 +147,19 @@ impl UploadController {
         let name = String::from_utf16(spool.name())
             .map_err(|_| "STASH rejected a filename that is not valid Unicode.".to_string())?;
         let path = retain_mount_spool(spool.detach_path())?;
-        // Move the only mount-originated copy into native-only recovery
-        // storage before any manifest work can fail. The path never enters a
-        // status DTO or React event.
-        let mut manifest = build_spool_manifest(path, name)?;
-        manifest.cleanup_on_success = true;
+        let size_bytes = std::fs::metadata(&path)
+            .map_err(|_| "The mounted write spool could not be read.".to_string())?
+            .len();
+        let summary = SourceSummary {
+            source_name: name.clone(),
+            folder_name: name.clone(),
+            file_count: 1,
+            total_bytes: size_bytes,
+            entries: vec![SourceEntry {
+                relative_path: name.clone(),
+                size_bytes,
+            }],
+        };
         let (cancel, shared) = {
             let mut state = lock(self)?;
             if matches!(
@@ -164,12 +172,43 @@ impl UploadController {
                 );
             }
             let cancel = Arc::new(AtomicBool::new(false));
-            state.selected = Some(manifest.clone());
+            // The WinFSP cleanup callback runs on a small native dispatcher
+            // stack. It must only hand off the closed spool; hashing uses a
+            // large buffer and happens on a Tauri blocking worker below.
+            state.selected = None;
             state.cancel = Some(cancel.clone());
-            state.status = status_for(&manifest.summary);
+            state.status = status_for(&summary);
             (cancel, self.inner.clone())
         };
         tauri::async_runtime::spawn(async move {
+            let manifest_result = tauri::async_runtime::spawn_blocking(move || {
+                let mut manifest = build_spool_manifest(path, name);
+                if let Ok(value) = &mut manifest {
+                    value.cleanup_on_success = true;
+                }
+                manifest
+            })
+            .await
+            .map_err(|_| "STASH could not prepare the mounted file for transfer.".to_string());
+            let manifest = match manifest_result {
+                Ok(Ok(manifest)) => manifest,
+                Ok(Err(error)) | Err(error) => {
+                    #[cfg(debug_assertions)]
+                    eprintln!("[stash-transfer] mounted spool prep failed: {error}");
+                    if let Ok(mut state) = shared.lock() {
+                        state.status.phase = TransferPhase::NeedsAttention;
+                        state.status.message = Some(format!(
+                            "{error} The native recovery spool was retained for attention."
+                        ));
+                        state.cancel = None;
+                    }
+                    return;
+                }
+            };
+            if let Ok(mut state) = shared.lock() {
+                state.selected = Some(manifest.clone());
+                state.status = status_for(&manifest.summary);
+            }
             run_transfer(manifest, cancel, shared).await;
         });
         Ok(())
@@ -323,7 +362,16 @@ async fn run_transfer(
     cancel: Arc<AtomicBool>,
     shared: Arc<Mutex<ControllerState>>,
 ) {
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[stash-transfer] begin: {} file(s), {} bytes",
+        manifest.summary.file_count, manifest.summary.total_bytes
+    );
     let result = transfer(manifest.clone(), cancel.clone(), shared.clone()).await;
+    #[cfg(debug_assertions)]
+    if let Err(error) = &result {
+        eprintln!("[stash-transfer] failed: {error}");
+    }
     if result.is_ok() && manifest.cleanup_on_success {
         if let Err(error) = cleanup_mount_spool(&manifest.root) {
             if let Ok(mut state) = shared.lock() {
@@ -590,6 +638,8 @@ fn set_phase(
     phase: TransferPhase,
     message: Option<String>,
 ) -> Result<(), String> {
+    #[cfg(debug_assertions)]
+    eprintln!("[stash-transfer] phase: {phase:?}");
     let mut state = shared
         .lock()
         .map_err(|_| "STASH transfer state is unavailable.".to_string())?;
@@ -788,7 +838,10 @@ fn checksum_file(path: &Path) -> Result<String, String> {
 
 fn checksum_reader<R: Read>(mut reader: R) -> Result<String, String> {
     let mut hasher = Sha256::new();
-    let mut buffer = [0u8; READ_BUFFER_BYTES];
+    // This is intentionally heap-backed: mount write completion is invoked
+    // from WinFSP dispatcher threads, whose native stacks are too small for
+    // the 1 MiB stream buffer used for creator-sized assets.
+    let mut buffer = vec![0u8; READ_BUFFER_BYTES];
     loop {
         let read = reader
             .read(&mut buffer)

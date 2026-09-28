@@ -40,7 +40,12 @@ export function App() {
 
   return (
     <div className="app-shell-root">
-      <TitleBar gateway={gateway} theme={theme} onToggleTheme={toggleTheme} />
+      <TitleBar
+        gateway={gateway}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        onReplaySplash={() => setShowSplash(true)}
+      />
       {auth.view === "signedIn" ? (
         <Shell gateway={gateway} username={auth.username} onSignOut={() => void signOut()} signOutError={signOutError} />
       ) : (

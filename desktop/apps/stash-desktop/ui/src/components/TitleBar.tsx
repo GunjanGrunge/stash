@@ -4,9 +4,10 @@ type Props = {
   gateway: DesktopGateway;
   theme: "dark" | "light";
   onToggleTheme: () => void;
+  onReplaySplash?: () => void;
 };
 
-export function TitleBar({ gateway, theme, onToggleTheme }: Props) {
+export function TitleBar({ gateway, theme, onToggleTheme, onReplaySplash }: Props) {
   return (
     <header
       className="titlebar"
@@ -17,10 +18,36 @@ export function TitleBar({ gateway, theme, onToggleTheme }: Props) {
       }}
     >
       <div className="titlebar-brand">
-        <span className="titlebar-app-title">STASH</span>
+        <svg className="titlebar-logo-svg" viewBox="0 0 1200 300" aria-label="STASH Logo">
+          <defs>
+            <linearGradient id="tb-g" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stopColor="#38BDF8" />
+              <stop offset="100%" stopColor="#7C3AED" />
+            </linearGradient>
+          </defs>
+          <g transform="translate(15 20) scale(.255)">
+            <polygon points="298,225 429,225 315,798 184,798" fill="url(#tb-g)" />
+            <polygon points="486,225 617,225 503,798 372,798" fill="url(#tb-g)" />
+            <polygon points="577,798 714,798 675,661" fill="url(#tb-g)" />
+          </g>
+          <text x="290" y="190" fill="currentColor" fontFamily="Inter, Arial, sans-serif" fontSize="118" fontWeight="700" letterSpacing="14">
+            STASH
+          </text>
+        </svg>
       </div>
 
       <div className="titlebar-actions">
+        {onReplaySplash && (
+          <button
+            type="button"
+            className="titlebar-action-btn"
+            onClick={onReplaySplash}
+            title="Replay Splash Screen Animation"
+          >
+            ✨ Splash
+          </button>
+        )}
+
         <button
           type="button"
           className="theme-toggle-btn"
