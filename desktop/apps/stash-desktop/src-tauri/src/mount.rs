@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use stash_core::ReadError;
 use stash_s3_provider::{HttpRangeProvider, LeaseSource};
-use stash_windows_fs::{DriveOptions, Library, Listing, StashFileSystemContext, TrashTarget, WriteSink, WriteSpool};
+use stash_windows_fs::{DriveOptions, Library, Listing, QueuedUpload, StashFileSystemContext, TrashTarget, WriteSink, WriteSpool};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows::Win32::System::LibraryLoader::{LoadLibraryW, SetDllDirectoryW};
@@ -129,6 +129,30 @@ impl Library for ApiLibrary {
         Some(used)
     }
 
+    fn create_folder(&self, parent: Option<&str>, name: &str) -> Result<String, ReadError> {
+        if parent.is_some_and(|id| !safe_folder_id(id)) {
+            return Err(ReadError::Io);
+        }
+        let token = crate::auth::id_token().map_err(|_| ReadError::LeaseExpired)?;
+        let response = self
+            .client
+            .post(format!("{}/folders", crate::api::api_url()))
+            .bearer_auth(token)
+            .json(&create_folder_body(parent, name))
+            .send()
+            .map_err(|_| ReadError::Offline)?;
+        match response.status().as_u16() {
+            200..=299 => response
+                .json::<Value>()
+                .ok()
+                .and_then(|body| body.get("folderId").and_then(Value::as_str).map(str::to_string))
+                .filter(|id| safe_folder_id(id))
+                .ok_or(ReadError::Io),
+            401 | 403 => Err(ReadError::LeaseExpired),
+            _ => Err(ReadError::Io),
+        }
+    }
+
     fn trash(&self, target: TrashTarget<'_>) -> Result<(), ReadError> {
         let path = trash_path(target).ok_or(ReadError::Io)?;
         let token = crate::auth::id_token().map_err(|_| ReadError::LeaseExpired)?;
@@ -143,6 +167,14 @@ impl Library for ApiLibrary {
             401 | 403 => Err(ReadError::LeaseExpired),
             _ => Err(ReadError::Io),
         }
+    }
+}
+
+/// The `POST /folders` body for a folder made on S:; the top level sends no parent.
+fn create_folder_body(parent: Option<&str>, name: &str) -> Value {
+    match parent {
+        Some(parent) => serde_json::json!({ "name": name, "parentFolderId": parent }),
+        None => serde_json::json!({ "name": name }),
     }
 }
 
@@ -162,10 +194,14 @@ struct MountWriteSink {
 }
 
 impl WriteSink for MountWriteSink {
-    fn begin(&self, name: &[u16]) -> Result<WriteSpool, String> {
+    fn begin(&self, parent: Option<&str>, name: &[u16]) -> Result<WriteSpool, String> {
         #[cfg(debug_assertions)]
         eprintln!("[stash-mount] begin write spool for {} UTF-16 units", name.len());
-        WriteSpool::create_for_mount(name)
+        WriteSpool::create_for_mount(parent, name)
+    }
+
+    fn queued_in(&self, parent: Option<&str>) -> Vec<QueuedUpload> {
+        self.uploads.mount_queued_in(parent)
     }
 
     fn submit(&self, spool: WriteSpool) -> Result<(), String> {
@@ -430,6 +466,12 @@ mod tests {
         let controller = MountController::default();
         assert!(controller.unmount().is_ok());
         assert!(!controller.status().mounted);
+    }
+
+    #[test]
+    fn a_folder_made_on_s_is_created_in_its_parent_or_at_the_top_level() {
+        assert_eq!(create_folder_body(Some("pack-1"), "Snares"), serde_json::json!({ "name": "Snares", "parentFolderId": "pack-1" }));
+        assert_eq!(create_folder_body(None, "Beats"), serde_json::json!({ "name": "Beats" }));
     }
 
     #[test]

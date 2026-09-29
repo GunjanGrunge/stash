@@ -9,8 +9,9 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use stash_windows_fs::WriteSpool;
+use stash_windows_fs::{QueuedUpload, WriteSpool};
 use std::{
+    collections::VecDeque,
     fs::File,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -18,6 +19,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
+    time::{Duration, Instant},
 };
 use tauri::State;
 use walkdir::WalkDir;
@@ -26,8 +28,13 @@ const PART_SIZE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_PARTS: u64 = 10_000;
 const READ_BUFFER_BYTES: usize = 1024 * 1024;
 const MOUNT_RECOVERY_DIR: &str = "stash-mount-recovery";
-const MAX_RECOVERY_SPOOLS: u64 = 32;
-const MAX_RECOVERY_BYTES: u64 = 1024 * 1024 * 1024;
+/// Files copied onto S: wait here (as local copies) for their upload, so the
+/// ceiling must fit a real folder copy; a sample library is thousands of files.
+const MAX_RECOVERY_SPOOLS: u64 = 20_000;
+const MAX_RECOVERY_BYTES: u64 = 20 * 1024 * 1024 * 1024;
+/// An uploaded S: file stays visible from its local copy this long, so it never
+/// blinks out between its upload landing and the drive's next listing.
+const LANDED_LINGER: Duration = Duration::from_secs(10);
 static IDEMPOTENCY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn idempotency_key(scope: &str) -> String {
@@ -125,12 +132,49 @@ fn create_stash_body(manifest: &SourceManifest) -> serde_json::Value {
 #[derive(Clone)]
 pub struct UploadController {
     inner: Arc<Mutex<ControllerState>>,
+    mount: Arc<Mutex<MountQueue>>,
 }
 
 struct ControllerState {
     selected: Option<SourceManifest>,
     status: TransferStatus,
     cancel: Option<Arc<AtomicBool>>,
+}
+
+/// One file closed on S:, waiting for or in the middle of its upload.
+#[derive(Clone, Debug)]
+struct MountUpload {
+    name: String,
+    name_utf16: Vec<u16>,
+    /// The STASH folder it lands in; `None` is the top level.
+    parent: Option<String>,
+    /// Its local copy in native recovery storage.
+    path: PathBuf,
+    size: u64,
+}
+
+/// Files copied onto S: upload one after another, so copying a whole folder
+/// never fails because an earlier file is still uploading.
+#[derive(Default)]
+struct MountQueue {
+    waiting: VecDeque<MountUpload>,
+    current: Option<MountUpload>,
+    /// Uploaded and still shown from their local copy for `LANDED_LINGER`.
+    landed: Vec<(MountUpload, Instant)>,
+    worker_running: bool,
+}
+
+impl MountQueue {
+    /// Forgets uploads past their linger and removes their local copies.
+    fn prune_landed(&mut self) {
+        self.landed.retain(|(upload, at)| {
+            let keep = at.elapsed() < LANDED_LINGER;
+            if !keep {
+                let _ = cleanup_mount_spool(&upload.path);
+            }
+            keep
+        });
+    }
 }
 
 impl Default for UploadController {
@@ -141,6 +185,7 @@ impl Default for UploadController {
                 status: empty_status(),
                 cancel: None,
             })),
+            mount: Arc::new(Mutex::new(MountQueue::default())),
         }
     }
 }
@@ -163,78 +208,137 @@ impl UploadController {
         }
     }
 
-    /// Schedules a mount-originated spool through the same verified transfer
-    /// pipeline as the Tauri Stash It flow. The path and payload stay native;
-    /// only the safe status is shared with the webview.
+    /// Queues a file closed on S: for upload into its folder, through the same
+    /// verified transfer pipeline as the Stash It flow. Runs on WinFSP's small
+    /// cleanup dispatcher stack, so it only moves the spool and enqueues it;
+    /// hashing and upload happen on the queue's worker.
     pub fn submit_mount_spool(&self, spool: WriteSpool) -> Result<(), String> {
         let name = String::from_utf16(spool.name())
             .map_err(|_| "STASH rejected a filename that is not valid Unicode.".to_string())?;
+        let name_utf16 = spool.name().to_vec();
+        let parent = spool.parent().map(str::to_string);
         let path = retain_mount_spool(spool.detach_path())?;
-        let size_bytes = std::fs::metadata(&path)
+        let size = std::fs::metadata(&path)
             .map_err(|_| "The mounted write spool could not be read.".to_string())?
             .len();
-        let summary = SourceSummary {
-            source_name: name.clone(),
-            folder_name: name.clone(),
-            file_count: 1,
-            total_bytes: size_bytes,
-            entries: vec![SourceEntry {
-                relative_path: name.clone(),
-                size_bytes,
-            }],
+        let start_worker = {
+            let mut queue = self
+                .mount
+                .lock()
+                .map_err(|_| "STASH transfer state is unavailable.".to_string())?;
+            queue.waiting.push_back(MountUpload { name, name_utf16, parent, path, size });
+            !std::mem::replace(&mut queue.worker_running, true)
         };
-        let (cancel, shared) = {
-            let mut state = lock(self)?;
-            if matches!(
-                state.status.phase,
-                TransferPhase::Stashing | TransferPhase::Verifying
-            ) {
-                return Err(
-                    "Another STASH transfer is already active; the mounted write needs attention."
-                        .to_string(),
-                );
+        if start_worker {
+            let controller = self.clone();
+            tauri::async_runtime::spawn(async move { controller.drain_mount_queue().await });
+        }
+        Ok(())
+    }
+
+    /// Files in `parent` that were closed on S: and have not been listed by
+    /// STASH for long enough: waiting, uploading, or just landed.
+    pub fn mount_queued_in(&self, parent: Option<&str>) -> Vec<QueuedUpload> {
+        let Ok(mut queue) = self.mount.lock() else {
+            return Vec::new();
+        };
+        queue.prune_landed();
+        queue
+            .current
+            .iter()
+            .chain(queue.waiting.iter())
+            .chain(queue.landed.iter().map(|(upload, _)| upload))
+            .filter(|upload| upload.parent.as_deref() == parent)
+            .map(|upload| QueuedUpload {
+                name: upload.name_utf16.clone(),
+                size: upload.size,
+                path: upload.path.clone(),
+            })
+            .collect()
+    }
+
+    /// Uploads queued S: files one at a time until the queue is empty.
+    async fn drain_mount_queue(self) {
+        loop {
+            let next = {
+                let Ok(mut queue) = self.mount.lock() else { return };
+                queue.prune_landed();
+                match queue.waiting.pop_front() {
+                    Some(upload) => {
+                        queue.current = Some(upload.clone());
+                        upload
+                    }
+                    None => {
+                        queue.worker_running = false;
+                        return;
+                    }
+                }
+            };
+            // A Stash started in the app owns the transfer status; let it finish.
+            while self.transfer_active() {
+                let _ = tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(500))).await;
             }
-            let cancel = Arc::new(AtomicBool::new(false));
-            // The WinFSP cleanup callback runs on a small native dispatcher
-            // stack. It must only hand off the closed spool; hashing uses a
-            // large buffer and happens on a Tauri blocking worker below.
+            let landed = self.upload_mounted(&next).await;
+            if let Ok(mut queue) = self.mount.lock() {
+                queue.current = None;
+                if landed {
+                    queue.landed.push((next, Instant::now()));
+                }
+            }
+        }
+    }
+
+    fn transfer_active(&self) -> bool {
+        self.inner.lock().map(|state| state.cancel.is_some()).unwrap_or(false)
+    }
+
+    /// One queued S: file through the verified pipeline. True once STASH has
+    /// committed it. A failure keeps its local copy in recovery storage.
+    async fn upload_mounted(&self, upload: &MountUpload) -> bool {
+        let summary = SourceSummary {
+            source_name: upload.name.clone(),
+            folder_name: upload.name.clone(),
+            file_count: 1,
+            total_bytes: upload.size,
+            entries: vec![SourceEntry { relative_path: upload.name.clone(), size_bytes: upload.size }],
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let shared = self.inner.clone();
+        if let Ok(mut state) = shared.lock() {
             state.selected = None;
             state.cancel = Some(cancel.clone());
             state.status = status_for(&summary);
-            (cancel, self.inner.clone())
-        };
-        tauri::async_runtime::spawn(async move {
-            let manifest_result = tauri::async_runtime::spawn_blocking(move || {
-                let mut manifest = build_spool_manifest(path, name);
-                if let Ok(value) = &mut manifest {
-                    value.cleanup_on_success = true;
-                }
-                manifest
-            })
+        }
+        let (path, name) = (upload.path.clone(), upload.name.clone());
+        let manifest = tauri::async_runtime::spawn_blocking(move || build_spool_manifest(path, name))
             .await
             .map_err(|_| "STASH could not prepare the mounted file for transfer.".to_string());
-            let manifest = match manifest_result {
-                Ok(Ok(manifest)) => manifest,
-                Ok(Err(error)) | Err(error) => {
-                    #[cfg(debug_assertions)]
-                    eprintln!("[stash-transfer] mounted spool prep failed: {error}");
-                    if let Ok(mut state) = shared.lock() {
-                        state.status.phase = TransferPhase::NeedsAttention;
-                        state.status.message = Some(format!(
-                            "{error} The native recovery spool was retained for attention."
-                        ));
-                        state.cancel = None;
-                    }
-                    return;
+        let mut manifest = match manifest {
+            Ok(Ok(manifest)) => manifest,
+            Ok(Err(error)) | Err(error) => {
+                #[cfg(debug_assertions)]
+                eprintln!("[stash-transfer] mounted spool prep failed: {error}");
+                if let Ok(mut state) = shared.lock() {
+                    state.status.phase = TransferPhase::NeedsAttention;
+                    state.status.message =
+                        Some(format!("{error} The native recovery spool was retained for attention."));
+                    state.cancel = None;
                 }
-            };
-            if let Ok(mut state) = shared.lock() {
-                state.selected = Some(manifest.clone());
-                state.status = status_for(&manifest.summary);
+                return false;
             }
-            run_transfer(manifest, cancel, shared).await;
-        });
-        Ok(())
+        };
+        manifest.destination = upload.parent.clone();
+        // The local copy outlives the upload briefly (see LANDED_LINGER).
+        manifest.cleanup_on_success = false;
+        if let Ok(mut state) = shared.lock() {
+            state.selected = Some(manifest.clone());
+            state.status = status_for(&manifest.summary);
+        }
+        run_transfer(manifest, cancel, shared.clone()).await;
+        shared
+            .lock()
+            .map(|state| state.status.phase == TransferPhase::Stashed)
+            .unwrap_or(false)
     }
 }
 
@@ -976,6 +1080,32 @@ mod tests {
         manifest.destination = Some("folder-123".into());
         assert_eq!(create_stash_body(&manifest)["parentFolderId"], "folder-123");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn files_copied_onto_s_stay_visible_in_their_own_folder_until_they_land() {
+        let controller = UploadController::default();
+        let upload = |name: &str, parent: Option<&str>| MountUpload {
+            name: name.into(),
+            name_utf16: name.encode_utf16().collect(),
+            parent: parent.map(Into::into),
+            path: scratch("queued").join(name),
+            size: 3,
+        };
+        {
+            let mut queue = controller.mount.lock().unwrap();
+            queue.waiting.push_back(upload("waiting.wav", Some("kicks")));
+            queue.current = Some(upload("uploading.wav", Some("kicks")));
+            queue.landed.push((upload("landed.wav", None), Instant::now()));
+            let expired = Instant::now().checked_sub(LANDED_LINGER + Duration::from_secs(1)).unwrap();
+            queue.landed.push((upload("expired.wav", None), expired));
+        }
+        let names = |parent| -> Vec<String> {
+            controller.mount_queued_in(parent).iter().map(|queued| String::from_utf16_lossy(&queued.name)).collect()
+        };
+        assert_eq!(names(Some("kicks")), ["uploading.wav", "waiting.wav"]);
+        assert_eq!(names(None), ["landed.wav"], "an upload past its linger is no longer shown");
+        assert!(names(Some("other")).is_empty());
     }
 
     /// The webview gateway rejects anything but these camelCase names
