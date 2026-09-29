@@ -58,7 +58,7 @@ export type NativeDropNotice = {
   message?: string;
 };
 
-export type TransferPhase = "Preparing" | "Stashing" | "Verifying" | "Stashed" | "NeedsAttention" | "Canceled";
+export type TransferPhase = "Ready" | "Preparing" | "Stashing" | "Verifying" | "Stashed" | "NeedsAttention" | "Canceled";
 export type TransferStatus = {
   phase: TransferPhase;
   sourceName?: string | null;

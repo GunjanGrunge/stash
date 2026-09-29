@@ -26,9 +26,9 @@ const SHORTCUTS: { start: StashStart; label: string; icon: string }[] = [
   { start: "documents", label: "Documents", icon: folderIcon },
 ];
 
-/** A status that belongs to a real Stash, not the backend's idle placeholder. */
+/** A status that belongs to a started Stash, not idle or a source still waiting for "Stash it". */
 const isRealTransfer = (status: TransferStatus | null): status is TransferStatus =>
-  Boolean(status && status.sourceName && status.fileCount > 0);
+  Boolean(status && status.phase !== "Ready" && status.sourceName && status.fileCount > 0);
 
 const files = (n: number) => `${n.toLocaleString()} ${n === 1 ? "file" : "files"}`;
 

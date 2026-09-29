@@ -15,7 +15,7 @@ test("Stash it is a full page in the app frame, not a pop-up", async () => {
 
 test("the idle backend status never shows as a running Stash", async () => {
   const screen = await read("../src/components/StashItScreen.tsx");
-  assert.match(screen, /Boolean\(status && status\.sourceName && status\.fileCount > 0\)/);
+  assert.match(screen, /Boolean\(status && status\.phase !== "Ready" && status\.sourceName && status\.fileCount > 0\)/);
   assert.match(screen, /const transfer = isRealTransfer\(status\) \? status : null;/);
 });
 
