@@ -26,6 +26,16 @@ test("source review and transfer UI preserve honest phases without fake completi
   assert.match(shell, /initialScreen = "Home"/);
 });
 
+test("a chosen file stays Ready with its Stash it button until the user confirms", async () => {
+  const [screen, transfers, gateway, fake] = await Promise.all([read("../src/components/StashItScreen.tsx"), read("../src/components/TransfersScreen.tsx"), read("../src/platform/tauri/gateway.ts"), read("../preview/fakeGateway.ts")]);
+  // A picked-but-unsent source must never read as a running "Preparing" Stash.
+  assert.match(screen, /isRealTransfer[^\n]*\n[^\n]*status\.phase !== "Ready"/);
+  assert.doesNotMatch(screen, /ACTIVE_PHASES = \[[^\]]*"Ready"/);
+  assert.match(transfers, /status\.phase !== "Ready" && status\.sourceName/);
+  assert.match(gateway, /\["Ready", "Preparing",/);
+  assert.match(fake, /const idle: TransferStatus = \{ phase: "Ready"/);
+});
+
 test("Files remains hierarchy-preserving and the visual slice adds native Stash It without web APIs", async () => {
   const [files, rail, styles, stash] = await Promise.all([read("../src/components/FilesScreen.tsx"), read("../src/components/NavigationRail.tsx"), read("../src/styles.css"), read("../src/components/StashItScreen.tsx")]);
   for (const marker of ["Folder", "File", "originalRelativePath", "toggleSort"]) assert.match(files, new RegExp(marker));

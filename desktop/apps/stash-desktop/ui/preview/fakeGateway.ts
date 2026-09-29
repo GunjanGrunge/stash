@@ -35,7 +35,7 @@ const summary: SourceSummary = {
 let mounted = false;
 let prefs = { launchAtLogin: true, mountAtLaunch: true, wasMounted: false };
 const mount = (): MountStatus => ({ mounted, label: "STASH", ...(mounted ? { letter: "S" } : {}) });
-const idle: TransferStatus = { phase: "Preparing", sourceName: null, fileCount: 0, completedFileCount: 0, totalBytes: 0, completedBytes: 0, manifestMatch: null, message: null };
+const idle: TransferStatus = { phase: "Ready", sourceName: null, fileCount: 0, completedFileCount: 0, totalBytes: 0, completedBytes: 0, manifestMatch: null, message: null };
 
 const search = (query: string): SearchResponse => ({
   hits: query.trim()

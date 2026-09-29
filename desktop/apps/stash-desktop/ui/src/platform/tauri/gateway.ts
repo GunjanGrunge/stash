@@ -105,7 +105,7 @@ function nativeDropNotice(value: unknown): NativeDropNotice {
   return { phase, ...(summary ? { summary } : {}), ...(typeof value.message === "string" && value.message.length <= 240 ? { message: value.message } : {}) };
 }
 function transferStatus(value: unknown): TransferStatus {
-  if (!isRecord(value) || !["Preparing", "Stashing", "Verifying", "Stashed", "NeedsAttention", "Canceled"].includes(String(value.phase)) || typeof value.fileCount !== "number" || typeof value.completedFileCount !== "number" || typeof value.totalBytes !== "number" || typeof value.completedBytes !== "number") throw new Error("STASH returned an invalid transfer status.");
+  if (!isRecord(value) || !["Ready", "Preparing", "Stashing", "Verifying", "Stashed", "NeedsAttention", "Canceled"].includes(String(value.phase)) || typeof value.fileCount !== "number" || typeof value.completedFileCount !== "number" || typeof value.totalBytes !== "number" || typeof value.completedBytes !== "number") throw new Error("STASH returned an invalid transfer status.");
   const manifestMatch = value.manifestMatch === "exact" || value.manifestMatch === "partial" || value.manifestMatch === "none" ? value.manifestMatch : null;
   return { phase: value.phase as TransferStatus["phase"], sourceName: typeof value.sourceName === "string" ? value.sourceName : null, fileCount: value.fileCount, completedFileCount: value.completedFileCount, totalBytes: value.totalBytes, completedBytes: value.completedBytes, manifestMatch, message: typeof value.message === "string" ? value.message : null };
 }

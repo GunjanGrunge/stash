@@ -49,6 +49,8 @@ fn idempotency_key(scope: &str) -> String {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum TransferPhase {
+    /// Nothing is running: idle, or a source is chosen but not yet confirmed.
+    Ready,
     Preparing,
     Stashing,
     Verifying,
@@ -197,7 +199,8 @@ impl UploadController {
         let summary = manifest.summary.clone();
         let mut state = lock(self)?;
         state.selected = Some(manifest);
-        state.status = status_for(&summary);
+        // Chosen, not started: only confirm_stash begins Preparing.
+        state.status = TransferStatus { phase: TransferPhase::Ready, ..status_for(&summary) };
         Ok(summary)
     }
 
@@ -485,7 +488,7 @@ fn status_for(summary: &SourceSummary) -> TransferStatus {
 }
 fn empty_status() -> TransferStatus {
     TransferStatus {
-        phase: TransferPhase::Preparing,
+        phase: TransferPhase::Ready,
         source_name: None,
         file_count: 0,
         completed_file_count: 0,
@@ -551,6 +554,9 @@ pub fn confirm_stash(controller: State<'_, UploadController>) -> Result<Transfer
 #[tauri::command]
 pub fn cancel_stash(controller: State<'_, UploadController>) -> Result<TransferStatus, String> {
     let mut state = lock(&controller)?;
+    if state.status.phase == TransferPhase::Ready {
+        return Ok(state.status.clone());
+    }
     if let Some(cancel) = &state.cancel {
         cancel.store(true, Ordering::SeqCst);
     }
@@ -1300,6 +1306,22 @@ mod tests {
         };
         assert_eq!(status_for(&summary).phase, TransferPhase::Preparing);
         assert_ne!(status_for(&summary).phase, TransferPhase::Stashed);
+    }
+
+    #[test]
+    fn choosing_a_source_is_ready_not_preparing_until_confirmed() {
+        let dir = std::env::temp_dir().join(format!("stash-ready-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("aws-gpu-quota-increase-request.txt");
+        std::fs::write(&file, b"quota").unwrap();
+        let controller = UploadController::default();
+        assert_eq!(lock(&controller).unwrap().status.phase, TransferPhase::Ready, "idle is Ready");
+        controller.select_source_path(file).unwrap();
+        let status = lock(&controller).unwrap().status.clone();
+        assert_eq!(status.phase, TransferPhase::Ready, "a chosen file waits for Stash it");
+        assert_eq!(status.source_name.as_deref(), Some("aws-gpu-quota-increase-request.txt"));
+        assert_eq!(serde_json::to_value(&status).unwrap()["phase"], "Ready");
+        let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
     fn transfer_phases_never_use_success_for_unverified_state() {

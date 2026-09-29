@@ -63,7 +63,8 @@ export function TransfersScreen({ gateway, deviceName, onStashIt, onOpenFiles }:
     return () => { alive = false; if (timer !== undefined) window.clearTimeout(timer); };
   }, [gateway]);
 
-  const real = status && status.sourceName && status.fileCount > 0 ? status : null;
+  // "Ready" is a source chosen in Stash it but not started: nothing is transferring.
+  const real = status && status.phase !== "Ready" && status.sourceName && status.fileCount > 0 ? status : null;
 
   if (!real) {
     return (
