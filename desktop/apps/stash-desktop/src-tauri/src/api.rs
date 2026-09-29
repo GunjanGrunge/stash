@@ -142,7 +142,10 @@ async fn decode_json<T: DeserializeOwned>(response: reqwest::Response) -> Result
 }
 
 #[tauri::command]
-pub async fn list_children(folder_id: String) -> Result<Value, String> {
+pub async fn list_children(
+    folder_id: String,
+    uploads: tauri::State<'_, crate::upload::UploadController>,
+) -> Result<Value, String> {
     let folder_id = folder_id.trim();
     if folder_id.is_empty()
         || folder_id.len() > 128
@@ -152,7 +155,25 @@ pub async fn list_children(folder_id: String) -> Result<Value, String> {
     {
         return Err("That folder could not be opened.".to_string());
     }
-    get_json(&format!("/folders/{folder_id}/children")).await
+    let mut listing = get_json(&format!("/folders/{folder_id}/children")).await?;
+    let parent = (folder_id != "ROOT").then_some(folder_id);
+    with_in_flight(&mut listing, uploads.in_flight_rows(parent));
+    Ok(listing)
+}
+
+/// Adds files still uploading from S: to a folder listing, so the app shows
+/// them the moment they are copied, like Explorer does. A name STASH already
+/// lists is not shown twice.
+fn with_in_flight(listing: &mut Value, rows: Vec<Value>) {
+    let Some(items) = listing.get_mut("items").and_then(Value::as_array_mut) else { return };
+    let listed: std::collections::HashSet<String> = items
+        .iter()
+        .filter_map(|item| item.get("name").and_then(Value::as_str))
+        .map(str::to_lowercase)
+        .collect();
+    items.extend(rows.into_iter().filter(|row| {
+        row.get("name").and_then(Value::as_str).is_some_and(|name| !listed.contains(&name.to_lowercase()))
+    }));
 }
 
 /// The caller's Stashes, most recent first (Recent Stashes).
@@ -198,14 +219,18 @@ fn safe_route_id(value: &str) -> Option<&str> {
 pub async fn trash_folder(folder_id: String) -> Result<Value, String> {
     let id = safe_route_id(&folder_id)
         .ok_or_else(|| "That folder could not be moved to Trash.".to_string())?;
-    UploadApi::new().delete_value(&format!("/folders/{id}")).await
+    let result = UploadApi::new().delete_value(&format!("/folders/{id}")).await?;
+    crate::events::library_changed();
+    Ok(result)
 }
 
 #[tauri::command]
 pub async fn trash_file(file_id: String) -> Result<Value, String> {
     let id = safe_route_id(&file_id)
         .ok_or_else(|| "That file could not be moved to Trash.".to_string())?;
-    UploadApi::new().delete_value(&format!("/files/{id}")).await
+    let result = UploadApi::new().delete_value(&format!("/files/{id}")).await?;
+    crate::events::library_changed();
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -215,6 +240,17 @@ mod tests {
     #[test]
     fn api_url_has_no_trailing_slash() {
         assert!(!api_url().ends_with('/'));
+    }
+
+    #[test]
+    fn files_uploading_from_s_join_the_listing_once() {
+        let mut listing = json!({ "items": [{ "entity": "FILE", "fileId": "f1", "name": "Kick.wav", "state": "committed" }] });
+        with_in_flight(&mut listing, vec![
+            json!({ "entity": "FILE", "fileId": "local-a", "name": "KICK.WAV", "state": "uploading" }),
+            json!({ "entity": "FILE", "fileId": "local-b", "name": "Snare.wav", "state": "queued" }),
+        ]);
+        let names: Vec<&str> = listing["items"].as_array().unwrap().iter().map(|item| item["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["Kick.wav", "Snare.wav"], "a name STASH already lists is not shown twice");
     }
 
     #[test]

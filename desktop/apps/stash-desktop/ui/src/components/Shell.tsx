@@ -62,6 +62,18 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
     return () => { active = false; unlisten?.(); };
   }, [gateway]);
 
+  // Storage used follows uploads and deletes, once per burst of changes.
+  useEffect(() => {
+    let active = true;
+    let pending: number | undefined;
+    let unlisten: (() => void) | undefined;
+    void gateway.library.onLibraryChanged(() => {
+      window.clearTimeout(pending);
+      pending = window.setTimeout(() => { if (active) loadUsage(); }, 2_000);
+    }).then((cleanup) => { if (active) unlisten = cleanup; else cleanup(); });
+    return () => { active = false; unlisten?.(); window.clearTimeout(pending); };
+  }, [gateway]);
+
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;

@@ -25,6 +25,8 @@ export type DesktopGateway = {
     unmountStash(): Promise<MountStatus>;
     /** The drive changed without this window asking (reconnected at launch, unmounted from the tray). */
     onMountChanged(listener: (status: MountStatus) => void): Promise<() => void>;
+    /** Something in the creator's STASH changed (on S:, an upload landed, or in the app). */
+    onLibraryChanged(listener: () => void): Promise<() => void>;
     /** Searches this device's index of the user's STASH; `refresh` re-reads the file list first. */
     search(query: string, refresh?: boolean): Promise<SearchResponse>;
     /** Cloud usage by media kind across the user's committed files. */

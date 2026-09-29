@@ -142,12 +142,16 @@ impl Library for ApiLibrary {
             .send()
             .map_err(|_| ReadError::Offline)?;
         match response.status().as_u16() {
-            200..=299 => response
-                .json::<Value>()
-                .ok()
-                .and_then(|body| body.get("folderId").and_then(Value::as_str).map(str::to_string))
-                .filter(|id| safe_folder_id(id))
-                .ok_or(ReadError::Io),
+            200..=299 => {
+                let id = response
+                    .json::<Value>()
+                    .ok()
+                    .and_then(|body| body.get("folderId").and_then(Value::as_str).map(str::to_string))
+                    .filter(|id| safe_folder_id(id))
+                    .ok_or(ReadError::Io)?;
+                crate::events::library_changed();
+                Ok(id)
+            }
             401 | 403 => Err(ReadError::LeaseExpired),
             _ => Err(ReadError::Io),
         }
@@ -163,7 +167,10 @@ impl Library for ApiLibrary {
             .send()
             .map_err(|_| ReadError::Offline)?;
         match response.status().as_u16() {
-            200..=299 => Ok(()),
+            200..=299 => {
+                crate::events::library_changed();
+                Ok(())
+            }
             401 | 403 => Err(ReadError::LeaseExpired),
             _ => Err(ReadError::Io),
         }

@@ -9,6 +9,7 @@
 mod api;
 mod auth;
 mod device;
+mod events;
 mod mount;
 mod prefs;
 mod search;
@@ -176,6 +177,7 @@ pub fn run() {
                 eprintln!("{error}");
             }
             app.manage(store);
+            events::init(app.handle());
             build_tray(app)?;
             // A start at Windows sign-in stays in the tray; otherwise open the window.
             if !started_at_login {

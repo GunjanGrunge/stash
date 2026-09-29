@@ -254,6 +254,7 @@ impl UploadController {
             queue.waiting.extend(uploads);
             !std::mem::replace(&mut queue.worker_running, true)
         };
+        crate::events::library_changed();
         if start_worker {
             let controller = self.clone();
             tauri::async_runtime::spawn(async move { controller.drain_mount_queue().await });
@@ -309,7 +310,26 @@ impl UploadController {
                     queue.landed.push((next, Instant::now()));
                 }
             }
+            crate::events::library_changed();
         }
+    }
+
+    /// S: uploads in `parent` that STASH does not list yet, as rows for the
+    /// app's Files screen: the one uploading now, then those waiting.
+    pub fn in_flight_rows(&self, parent: Option<&str>) -> Vec<serde_json::Value> {
+        let Ok(queue) = self.mount.lock() else { return Vec::new() };
+        let row = |upload: &MountUpload, state: &str| {
+            let id = upload.path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("upload");
+            serde_json::json!({ "entity": "FILE", "fileId": format!("local-{id}"), "name": upload.name, "sizeBytes": upload.size, "state": state })
+        };
+        queue
+            .current
+            .iter()
+            .map(|upload| (upload, "uploading"))
+            .chain(queue.waiting.iter().map(|upload| (upload, "queued")))
+            .filter(|(upload, _)| upload.parent.as_deref() == parent)
+            .map(|(upload, state)| row(upload, state))
+            .collect()
     }
 
     fn transfer_active(&self) -> bool {
@@ -559,6 +579,9 @@ async fn run_transfer(
     #[cfg(debug_assertions)]
     if let Err(error) = &result {
         eprintln!("[stash-transfer] failed: {error}");
+    }
+    if result.is_ok() {
+        crate::events::library_changed();
     }
     if result.is_ok() && manifest.cleanup_on_success {
         if let Err(error) = cleanup_mount_spool(&manifest.root) {

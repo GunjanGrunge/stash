@@ -73,6 +73,7 @@ export function createPreviewGateway(): DesktopGateway {
       mountStash: async () => { mounted = true; return mount(); },
       unmountStash: async () => { mounted = false; return mount(); },
       onMountChanged: async () => () => undefined,
+      onLibraryChanged: async () => () => undefined,
       search: async (query) => search(query),
       storageBreakdown: async () => ({ kinds: [
         { kind: "video", bytes: 286 * 1024 ** 3, files: 2_104 },

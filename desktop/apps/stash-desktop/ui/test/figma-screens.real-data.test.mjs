@@ -34,6 +34,17 @@ test("Settings only offers what works today; the rest says Coming soon", async (
   assert.match(screen, /Signed in as[\s\S]*\{username\}/);
 });
 
+test("Files stays live: STASH's change signal, focus, and a poll for other devices", async () => {
+  const [files, gateway] = await Promise.all([read("../src/components/FilesScreen.tsx"), read("../src/platform/tauri/gateway.ts")]);
+  assert.match(files, /gateway\.library\.onLibraryChanged\(soon\)/);
+  assert.match(files, /window\.setInterval\(refresh, OTHER_DEVICES_POLL_MS\)/);
+  assert.match(files, /OTHER_DEVICES_POLL_MS = 15_000/);
+  assert.match(gateway, /listen\("stash-library"/);
+  // Files still uploading from S: show as such and can't be trashed yet.
+  assert.match(files, /isInFlight\(item\) \? <StateTag tone="stashing"/);
+  assert.match(files, /!isInFlight\(item\) && \(item\.entity === "FOLDER"/);
+});
+
 test("Offline and the top bar use this device's real name", async () => {
   const [offline, topbar, shell] = await Promise.all([read("../src/components/OfflineScreen.tsx"), read("../src/components/TopBar.tsx"), read("../src/components/Shell.tsx")]);
   assert.match(offline, /eyebrow=\{`Pinned on \$\{deviceName\}`\}/);
