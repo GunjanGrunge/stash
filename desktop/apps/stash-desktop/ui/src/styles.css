@@ -454,25 +454,6 @@ html, body, #root {
   font-weight: 700;
   margin: 0;
 }
-.breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  font-size: 0.85rem;
-  color: var(--muted);
-  margin-top: 0.35rem;
-}
-.breadcrumb button {
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  font-size: inherit;
-  cursor: pointer;
-  padding: 0;
-}
-.breadcrumb button:hover {
-  color: var(--stash-cyan);
-}
 
 .workspace-actions {
   display: flex;

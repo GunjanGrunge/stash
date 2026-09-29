@@ -53,6 +53,20 @@
 .ui-empty-text { font: 400 11px/1.45 Inter, system-ui, sans-serif; color: var(--muted); }
 .ui-infobar { display: flex; align-items: center; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-card); }
 .ui-infobar p { flex: 1; margin: 0; font: 400 10px/1.4 Inter, system-ui, sans-serif; color: var(--muted); }
+
+/* Figma "Filesystem browser" breadcrumb: 42px card bar, 8px radius. */
+.ui-breadcrumb { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 42px; padding: 0 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-card); font: 400 13px/1.3 Inter, system-ui, sans-serif; }
+.ui-breadcrumb ol { display: flex; align-items: center; gap: 10px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.ui-breadcrumb li { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ui-breadcrumb li + li::before { content: ""; flex: none; width: 12px; height: 12px; background: url("./assets/figma/common/chevron-down.svg") center / 12px no-repeat; transform: rotate(-90deg); }
+.ui-breadcrumb li > * { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-breadcrumb button { padding: 0; border: 0; border-radius: 4px; background: none; color: var(--muted); font: inherit; cursor: pointer; }
+.ui-breadcrumb button:hover { color: var(--text); }
+.ui-breadcrumb button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ui-breadcrumb [aria-current="page"] { color: var(--text); }
+.ui-breadcrumb .ui-breadcrumb-root { display: flex; flex: none; align-items: center; gap: 8px; }
+.ui-breadcrumb .ui-breadcrumb-root img { flex: none; }
+.ui-breadcrumb-count { flex: none; color: var(--text-faint); font-size: 12px; font-variant-numeric: tabular-nums; }
 .ui-toggle { position: relative; width: 38px; height: 22px; flex: none; padding: 0; border: 0; border-radius: 999px; background: var(--border-strong); cursor: pointer; }
 .ui-toggle > span { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--muted); transition: transform 0.15s ease; }
 .ui-toggle.is-on { background: var(--accent); }

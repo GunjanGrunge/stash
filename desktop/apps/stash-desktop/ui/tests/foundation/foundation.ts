@@ -1,3 +1,6 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { Breadcrumb } from "../../src/components/ui";
 import { authOutcomeEvent, authReducer, firstInvalidSignInField, initialAuthState, type AuthState } from "../../src/state/authMachine";
 import { createTauriGateway, createUnavailableGateway, safeActionError } from "../../src/platform/tauri/gateway";
 import type { DesktopGateway } from "../../src/platform/contracts";
@@ -158,6 +161,11 @@ export function runWritePathUiContracts(): FoundationSummary {
   for (const label of ["Search", "Recent Stashes"]) if (!unavailableSource.includes("STASH capability notice") || !shellSource.includes(label)) throw new Error(`Navigation notice missing: ${label}`);
   if (!shellSource.includes("onNativeDrop") || !shellSource.includes("setDragOver")) throw new Error("Home drag-over subscription is missing.");
   return { property: "P7 splash cleanup/skip, native drop entry, and explicit unavailable navigation", cases: 4 };
+}
+
+/** Server-rendered Figma breadcrumb, for asserting its real markup. */
+export function renderBreadcrumb(trail: { id: string; name: string }[], itemCount?: number): string {
+  return renderToStaticMarkup(createElement(Breadcrumb, { trail, onNavigate: () => undefined, itemCount }));
 }
 
 export async function runFoundationSuite(): Promise<FoundationSummary[]> { return [runAuthProperties(), runHierarchyProperties(), await runGatewayProperties(), runThemeAccessibilityContracts(), runWritePathUiContracts()]; }

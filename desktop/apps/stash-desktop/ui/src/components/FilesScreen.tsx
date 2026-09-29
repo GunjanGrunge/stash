@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { CapabilityState, ChildItem, FolderLocation, MountStatus, SortDirection, SortKey, Usage } from "../domain/types";
 import type { DesktopGateway } from "../platform/contracts";
 import { safeActionError } from "../platform/tauri/gateway";
+import { Breadcrumb } from "./ui";
 
 export function formatBytes(value?: number | null): string {
   if (value == null || !Number.isFinite(value)) return "—";
@@ -162,14 +163,6 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
         <div>
           <p className="eyebrow">Library</p>
           <h1 id="files-heading">Your files</h1>
-          <nav className="breadcrumb" aria-label="Breadcrumb">
-            <button type="button" onClick={() => goTo(null, -1)}>Library</button>
-            {path.map((location, index) => (
-              <span key={`${location.id}-${index}`}>
-                &rsaquo; <button type="button" onClick={() => goTo(location, index)}>{location.name}</button>
-              </span>
-            ))}
-          </nav>
         </div>
 
         <div className="workspace-actions">
@@ -189,6 +182,12 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
           />
         </div>
       </header>
+
+      <Breadcrumb
+        trail={path}
+        onNavigate={(index) => goTo(index < 0 ? null : path[index] ?? null, index)}
+        itemCount={filesState.status === "ready" || filesState.status === "stale" ? items.length : undefined}
+      />
 
       {folderError && !showNewFolderModal && <div className="status-banner banner-warning" role="alert">{folderError}</div>}
 
