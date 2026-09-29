@@ -60,9 +60,24 @@ export function createStash(deps: { repo: StashRepository }) {
         body["manifestFileCount"] === undefined
           ? 0
           : requireByteCount(body["manifestFileCount"], "manifestFileCount");
-      const manifestFolderName = body["manifestFolderName"];
-      if (typeof manifestFolderName !== "string" || manifestFolderName.length === 0) {
-        throw badRequest("manifestFolderName must be a non-empty string");
+      // A folder Stash names its folder; loose files omit it so each file
+      // lands as itself. Either way the destination is an existing folder
+      // (validated at registration) or the top level.
+      const rawFolderName = body["manifestFolderName"];
+      let manifestFolderName: string | undefined;
+      if (rawFolderName !== undefined && rawFolderName !== null) {
+        if (typeof rawFolderName !== "string" || rawFolderName.length === 0 || rawFolderName.length > 255 || /[\\/]/.test(rawFolderName) || rawFolderName === "." || rawFolderName === "..") {
+          throw badRequest("manifestFolderName must be a single folder name");
+        }
+        manifestFolderName = rawFolderName;
+      }
+      const rawParent = body["parentFolderId"];
+      let parentFolderId: string | undefined;
+      if (rawParent !== undefined && rawParent !== null) {
+        if (typeof rawParent !== "string" || rawParent.length === 0 || rawParent.length > 128) {
+          throw badRequest("parentFolderId must be a folder id");
+        }
+        parentFolderId = rawParent;
       }
 
       const stashId = randomUUID();
@@ -77,7 +92,8 @@ export function createStash(deps: { repo: StashRepository }) {
         committedCount: 0,
         reservedBytes: reserveBytes,
         committedBytes: 0,
-        manifestFolderName,
+        ...(manifestFolderName !== undefined ? { manifestFolderName } : {}),
+        ...(parentFolderId !== undefined ? { parentFolderId } : {}),
         startedAt: now,
         updatedAt: now,
       };

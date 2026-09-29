@@ -27,7 +27,10 @@ export interface StashRecord {
   /** Bytes actually verified `committed`. */
   committedBytes: number;
   /** Selected-root display name captured at Stash creation. */
+  /** Present when a folder was Stashed; absent for loose files. */
   manifestFolderName?: string;
+  /** The existing folder the Stash lands in; absent means the top level. */
+  parentFolderId?: string;
   /** Real selected-root Folder identity recorded during registration. */
   manifestFolderId?: string;
   startedAt: string;

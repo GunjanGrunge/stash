@@ -62,6 +62,33 @@ describe("createStash", () => {
     expect((await repo.getProfile(USER))!.usedBytes).toBe(500);
   });
 
+  it("opens a Stash of loose files with no folder name (a file stays a file)", async () => {
+    const repo = repoWithQuota(1_000);
+    const res = await createStash({ repo })(event({ manifestTotalBytes: 5, manifestFileCount: 1, manifestFolderName: undefined }));
+    expect(res.statusCode).toBe(201);
+    const stash = await repo.getStash(USER, JSON.parse(res.body).stashId);
+    expect(stash!.manifestFolderName).toBeUndefined();
+    expect(stash!.parentFolderId).toBeUndefined();
+  });
+
+  it("records the destination folder a Stash lands in", async () => {
+    const repo = repoWithQuota(1_000);
+    const res = await createStash({ repo })(event({ manifestTotalBytes: 5, parentFolderId: "folder-123" }));
+    expect(res.statusCode).toBe(201);
+    const stash = await repo.getStash(USER, JSON.parse(res.body).stashId);
+    expect(stash!.parentFolderId).toBe("folder-123");
+    expect(stash!.manifestFolderName).toBe("Sample Pack");
+  });
+
+  it("rejects an unusable folder name or destination id and writes nothing", async () => {
+    for (const bad of [{ manifestFolderName: "" }, { manifestFolderName: "a/b" }, { manifestFolderName: 7 }, { parentFolderId: "" }, { parentFolderId: 42 }, { parentFolderId: "x".repeat(200) }]) {
+      const repo = repoWithQuota(1_000);
+      const res = await createStash({ repo })(event({ manifestTotalBytes: 5, ...bad }));
+      expect(res.statusCode, JSON.stringify(bad)).toBe(400);
+      expect((await repo.getProfile(USER))!.usedBytes).toBe(0);
+    }
+  });
+
   it("rejects a request with no verified subject claim (401)", async () => {
     const repo = repoWithQuota(1_000);
     const res = await createStash({ repo })(
