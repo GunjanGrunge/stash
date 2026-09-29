@@ -33,6 +33,7 @@ const summary: SourceSummary = {
 };
 
 let mounted = false;
+let prefs = { launchAtLogin: true, mountAtLaunch: true, wasMounted: false };
 const mount = (): MountStatus => ({ mounted, label: "STASH", ...(mounted ? { letter: "S" } : {}) });
 const idle: TransferStatus = { phase: "Preparing", sourceName: null, fileCount: 0, completedFileCount: 0, totalBytes: 0, completedBytes: 0, manifestMatch: null, message: null };
 
@@ -71,6 +72,7 @@ export function createPreviewGateway(): DesktopGateway {
       mountStatus: async () => mount(),
       mountStash: async () => { mounted = true; return mount(); },
       unmountStash: async () => { mounted = false; return mount(); },
+      onMountChanged: async () => () => undefined,
       search: async (query) => search(query),
       storageBreakdown: async () => ({ kinds: [
         { kind: "video", bytes: 286 * 1024 ** 3, files: 2_104 },
@@ -85,7 +87,11 @@ export function createPreviewGateway(): DesktopGateway {
         { stashId: "st3", state: "cancelled", fileCount: 12, committedCount: 3, committedBytes: 90 * 1024 ** 2, startedAt: new Date(Date.now() - 3 * 86_400_000).toISOString(), updatedAt: new Date().toISOString(), name: null },
       ],
     },
-    device: { info: async () => ({ name: "GUNJAN-PC", os: "Windows", appVersion: "0.1.0" }) },
+    device: {
+      info: async () => ({ name: "GUNJAN-PC", os: "Windows", appVersion: "0.1.0" }),
+      preferences: async () => ({ ...prefs }),
+      setPreferences: async (choice) => { prefs = { ...prefs, ...choice }; return { ...prefs }; },
+    },
     stash: {
       selectSource: async () => summary,
       confirm: async () => ({ ...idle, phase: "Stashing", sourceName: summary.sourceName, fileCount: 43, completedFileCount: 18, totalBytes: summary.totalBytes, completedBytes: 11_900_000_000 }),

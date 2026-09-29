@@ -109,6 +109,16 @@ export type StashSummary = {
   name: string | null;
 };
 
+/** Workstation preferences the native side saves. */
+export type Preferences = {
+  /** Start STASH in the tray when signing in to Windows. */
+  launchAtLogin: boolean;
+  /** When STASH starts, mount S: again if it was mounted last time. */
+  mountAtLaunch: boolean;
+  /** Whether S: was mounted when STASH last ran (recorded, not edited). */
+  wasMounted: boolean;
+};
+
 /** This workstation, as the native side reports it. */
 export type DeviceInfo = { name: string; os: string; appVersion: string };
 

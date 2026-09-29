@@ -10,7 +10,7 @@ import plusIcon from "../assets/figma/common/plus.svg";
 import refreshIcon from "../assets/figma/common/refresh-cw.svg";
 import slidersIcon from "../assets/figma/common/sliders-horizontal.svg";
 import userIcon from "../assets/figma/common/user.svg";
-import type { DeviceInfo, SearchKind, StorageBreakdown, Usage } from "../domain/types";
+import type { DeviceInfo, Preferences, SearchKind, StorageBreakdown, Usage } from "../domain/types";
 import type { DesktopGateway } from "../platform/contracts";
 import { safeActionError } from "../platform/tauri/gateway";
 import { formatBytes } from "./FilesScreen";
@@ -43,6 +43,25 @@ type Props = {
 /** Figma "Settings" (6:3); Storage & cache (6:9) and Devices (6:15) open as their own pages. */
 export function SettingsScreen({ gateway, username, device, online, usage, mounted, mountBusy, onToggleMount, onSignOut, initialSection = "General" }: Props) {
   const [section, setSection] = useState<SettingsSection>(initialSection);
+  const [prefs, setPrefs] = useState<Preferences | null>(null);
+  const [prefsBusy, setPrefsBusy] = useState(false);
+  const [prefsError, setPrefsError] = useState("");
+  useEffect(() => {
+    let active = true;
+    void gateway.device.preferences().then((value) => { if (active) setPrefs(value); }).catch((error) => { if (active) setPrefsError(safeActionError(error, "STASH couldn't read its startup settings.")); });
+    return () => { active = false; };
+  }, [gateway]);
+  // Each switch applies at once; there is nothing to Save.
+  const choose = (change: Partial<Pick<Preferences, "launchAtLogin" | "mountAtLaunch">>) => {
+    if (!prefs) return;
+    setPrefsBusy(true);
+    setPrefsError("");
+    void gateway.device
+      .setPreferences({ launchAtLogin: change.launchAtLogin ?? prefs.launchAtLogin, mountAtLaunch: change.mountAtLaunch ?? prefs.mountAtLaunch })
+      .then(setPrefs)
+      .catch((error) => setPrefsError(safeActionError(error, "STASH couldn't save that setting.")))
+      .finally(() => setPrefsBusy(false));
+  };
   const back = <button type="button" className="button button-secondary" onClick={() => setSection("General")}>Back to Settings</button>;
 
   if (section === "Storage & cache") return <StorageScreen gateway={gateway} device={device} usage={usage} back={back} />;
@@ -66,7 +85,9 @@ export function SettingsScreen({ gateway, username, device, online, usage, mount
               {section === "General" && (
                 <Panel className="settings-group">
                   <GroupHeading title="General" copy={`Behavior for STASH on ${device.name}.`} />
-                  <SettingRow title="Launch STASH at sign in" copy="Mount your cloud drive automatically when Windows starts." soon control={<Toggle checked={false} disabled label="Launch STASH at sign in" />} />
+                  <SettingRow title="Launch STASH at sign in" copy="Start STASH in the tray when you sign in to Windows, so S: and your uploads pick up where they left off." control={<Toggle checked={prefs?.launchAtLogin ?? false} disabled={!prefs || prefsBusy} onChange={(on) => choose({ launchAtLogin: on })} label="Launch STASH at sign in" />} />
+                  <SettingRow title="Mount S: when STASH starts" copy="Reconnect your cloud drive automatically if it was mounted when STASH last ran." control={<Toggle checked={prefs?.mountAtLaunch ?? false} disabled={!prefs || prefsBusy} onChange={(on) => choose({ mountAtLaunch: on })} label="Mount S: when STASH starts" />} />
+                  {prefsError && <p className="settings-footnote" role="alert">{prefsError}</p>}
                   <SettingRow title="Drive letter" copy="Where STASH appears in File Explorer." control={<SettingValue>S:\</SettingValue>} />
                   <SettingRow title="Open files on demand" copy="Download cloud-only assets when another app requests them." control={<Toggle checked disabled label="Open files on demand" />} />
                   <SettingRow title="Show status badges" copy="Display cloud, available, pinned, syncing, and issue states in File Explorer." soon control={<Toggle checked={false} disabled label="Show status badges" />} />

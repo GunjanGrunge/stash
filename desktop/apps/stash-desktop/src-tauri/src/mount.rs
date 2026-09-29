@@ -432,16 +432,29 @@ pub async fn mount_status(state: tauri::State<'_, MountController>) -> Result<Mo
     Ok(state.status())
 }
 
+/// Tells an open window the drive changed without it asking (a launch-time
+/// remount, or Unmount from the tray).
+pub const MOUNT_EVENT: &str = "stash-mount";
+
+/// The creator's own mount and unmount are remembered for the next launch.
 #[tauri::command]
-pub async fn mount_stash(state: tauri::State<'_, MountController>) -> Result<MountStatus, String> {
-    state.mount().await
+pub async fn mount_stash(
+    state: tauri::State<'_, MountController>,
+    prefs: tauri::State<'_, crate::prefs::PreferenceStore>,
+) -> Result<MountStatus, String> {
+    let status = state.mount().await?;
+    prefs.remember_mounted(true);
+    Ok(status)
 }
 
 #[tauri::command]
 pub async fn unmount_stash(
     state: tauri::State<'_, MountController>,
+    prefs: tauri::State<'_, crate::prefs::PreferenceStore>,
 ) -> Result<MountStatus, String> {
-    state.unmount()
+    let status = state.unmount()?;
+    prefs.remember_mounted(false);
+    Ok(status)
 }
 
 #[cfg(test)]

@@ -54,6 +54,14 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
     void gateway.library.mountStatus().then((data) => setMount({ status: "ready", data })).catch((error) => setMount({ status: "offline", message: safeActionError(error, "Mount unavailable") }));
   };
 
+  // S: can connect without this window asking (at launch) or drop from the tray.
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void gateway.library.onMountChanged((data) => { if (active) setMount({ status: "ready", data }); }).then((cleanup) => { if (active) unlisten = cleanup; else cleanup(); });
+    return () => { active = false; unlisten?.(); };
+  }, [gateway]);
+
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;

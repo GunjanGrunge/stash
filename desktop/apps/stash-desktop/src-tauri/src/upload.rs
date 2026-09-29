@@ -171,6 +171,7 @@ impl MountQueue {
             let keep = at.elapsed() < LANDED_LINGER;
             if !keep {
                 let _ = cleanup_mount_spool(&upload.path);
+                let _ = std::fs::remove_file(upload_note_path(&upload.path));
             }
             keep
         });
@@ -221,19 +222,42 @@ impl UploadController {
         let size = std::fs::metadata(&path)
             .map_err(|_| "The mounted write spool could not be read.".to_string())?
             .len();
+        // Where it goes survives a restart, so a Quit or reboot never strands it.
+        save_upload_note(&path, &name, parent.as_deref());
+        self.enqueue_mount_uploads(vec![MountUpload { name, name_utf16, parent, path, size }]);
+        Ok(())
+    }
+
+    /// Queues uploads from S: that did not land before STASH last quit.
+    /// Called once the session is restored at launch.
+    pub fn resume_saved_uploads(&self) {
+        let queued: Vec<PathBuf> = self
+            .mount
+            .lock()
+            .map(|queue| queue.current.iter().chain(queue.waiting.iter()).map(|upload| upload.path.clone()).collect())
+            .unwrap_or_default();
+        let saved = saved_uploads(&mount_recovery_dir())
+            .into_iter()
+            .filter(|upload| !queued.contains(&upload.path))
+            .collect::<Vec<_>>();
+        #[cfg(debug_assertions)]
+        eprintln!("[stash-transfer] resuming {} upload(s) from S:", saved.len());
+        self.enqueue_mount_uploads(saved);
+    }
+
+    fn enqueue_mount_uploads(&self, uploads: Vec<MountUpload>) {
+        if uploads.is_empty() {
+            return;
+        }
         let start_worker = {
-            let mut queue = self
-                .mount
-                .lock()
-                .map_err(|_| "STASH transfer state is unavailable.".to_string())?;
-            queue.waiting.push_back(MountUpload { name, name_utf16, parent, path, size });
+            let Ok(mut queue) = self.mount.lock() else { return };
+            queue.waiting.extend(uploads);
             !std::mem::replace(&mut queue.worker_running, true)
         };
         if start_worker {
             let controller = self.clone();
             tauri::async_runtime::spawn(async move { controller.drain_mount_queue().await });
         }
-        Ok(())
     }
 
     /// Files in `parent` that were closed on S: and have not been listed by
@@ -346,6 +370,41 @@ fn mount_recovery_dir() -> PathBuf {
     std::env::temp_dir().join(MOUNT_RECOVERY_DIR)
 }
 
+/// The note beside a queued spool: `write-1-2.spool` → `write-1-2.spool.json`.
+fn upload_note_path(spool: &Path) -> PathBuf {
+    let mut name = spool.as_os_str().to_owned();
+    name.push(".json");
+    PathBuf::from(name)
+}
+
+fn save_upload_note(spool: &Path, name: &str, parent: Option<&str>) {
+    let note = serde_json::json!({ "name": name, "parent": parent });
+    if std::fs::write(upload_note_path(spool), note.to_string()).is_err() {
+        #[cfg(debug_assertions)]
+        eprintln!("[stash-transfer] couldn't save where a queued upload goes; it won't resume after a restart");
+    }
+}
+
+/// Queued uploads recorded in `dir`: each spool that still has its note.
+fn saved_uploads(dir: &Path) -> Vec<MountUpload> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut uploads: Vec<MountUpload> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "spool"))
+        .filter_map(|path| {
+            let note: serde_json::Value = serde_json::from_slice(&std::fs::read(upload_note_path(&path)).ok()?).ok()?;
+            let name = note.get("name")?.as_str()?.to_string();
+            let parent = note.get("parent").and_then(serde_json::Value::as_str).map(str::to_string);
+            let size = std::fs::metadata(&path).ok()?.len();
+            Some(MountUpload { name_utf16: name.encode_utf16().collect(), name, parent, path, size })
+        })
+        .collect();
+    // Oldest first, as they were written.
+    uploads.sort_by_key(|upload| std::fs::metadata(&upload.path).and_then(|meta| meta.modified()).ok());
+    uploads
+}
+
 fn retain_mount_spool(path: PathBuf) -> Result<PathBuf, String> {
     let directory = mount_recovery_dir();
     std::fs::create_dir_all(&directory)
@@ -362,7 +421,8 @@ fn retain_mount_spool(path: PathBuf) -> Result<PathBuf, String> {
         let metadata = entry
             .metadata()
             .map_err(|_| "STASH native recovery storage is unavailable.".to_string())?;
-        if metadata.is_file() {
+        // Notes beside spools are a few bytes and don't count as files.
+        if metadata.is_file() && entry.path().extension().is_none_or(|ext| ext != "json") {
             count = count.saturating_add(1);
             bytes = bytes.saturating_add(metadata.len());
         }
@@ -1079,6 +1139,21 @@ mod tests {
         let mut manifest = build_manifest(file).unwrap();
         manifest.destination = Some("folder-123".into());
         assert_eq!(create_stash_body(&manifest)["parentFolderId"], "folder-123");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_upload_queued_from_s_resumes_after_a_restart() {
+        let dir = scratch("resume");
+        let spool = dir.join("write-1-1.spool");
+        std::fs::write(&spool, b"abc").unwrap();
+        save_upload_note(&spool, "Kick.wav", Some("kicks"));
+        // A spool with no note (from an older build) is left alone.
+        std::fs::write(dir.join("write-1-2.spool"), b"orphan").unwrap();
+        let saved = saved_uploads(&dir);
+        assert_eq!(saved.len(), 1);
+        assert_eq!((saved[0].name.as_str(), saved[0].parent.as_deref(), saved[0].size), ("Kick.wav", Some("kicks"), 3));
+        assert_eq!(saved[0].path, spool);
         let _ = std::fs::remove_dir_all(dir);
     }
 

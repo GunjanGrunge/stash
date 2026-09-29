@@ -75,7 +75,9 @@ function SignInCard({ gateway, state, dispatch }: Props) {
   const password = useRef<HTMLInputElement>(null);
   const newPassword = useRef<HTMLInputElement>(null);
   const [email, setEmail] = useState("");
-  const [remember, setRemember] = useState(false);
+  // On by default: STASH lives in the tray and reconnects S: at launch, which
+  // needs the sign-in kept (in Windows Credential Manager, never the password).
+  const [remember, setRemember] = useState(true);
   const [validation, setValidation] = useState("");
 
   useEffect(() => {

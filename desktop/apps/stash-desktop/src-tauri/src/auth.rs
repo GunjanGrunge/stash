@@ -380,6 +380,11 @@ pub async fn complete_new_password(
 
 #[tauri::command]
 pub async fn restore_session() -> Result<RestoreOutcome, String> {
+    // STASH restores the session itself at launch while the window may ask
+    // too. Two refreshes of one rotating token can invalidate each other, so
+    // restores run one at a time; the second finds the fresh session.
+    static RESTORING: OnceLock<tauri::async_runtime::Mutex<()>> = OnceLock::new();
+    let _one_at_a_time = RESTORING.get_or_init(|| tauri::async_runtime::Mutex::new(())).lock().await;
     let store = CredentialManagerStore;
     // A window reload keeps the process, and with it the session: reuse it
     // rather than asking the creator to sign in again.

@@ -1,4 +1,4 @@
-import type { AuthOutcome, ChildItem, DeviceInfo, MountStatus, NativeDropNotice, RestoreOutcome, SearchResponse, SourceSummary, StashSummary, StorageBreakdown, TransferStatus, Usage } from "../domain/types";
+import type { AuthOutcome, ChildItem, DeviceInfo, MountStatus, NativeDropNotice, Preferences, RestoreOutcome, SearchResponse, SourceSummary, StashSummary, StorageBreakdown, TransferStatus, Usage } from "../domain/types";
 
 export type WindowAction = "minimize" | "toggle-maximize" | "close";
 /** Folders the Stash it picker can open in; the native side allow-lists these. */
@@ -23,6 +23,8 @@ export type DesktopGateway = {
     mountStatus(): Promise<MountStatus>;
     mountStash(): Promise<MountStatus>;
     unmountStash(): Promise<MountStatus>;
+    /** The drive changed without this window asking (reconnected at launch, unmounted from the tray). */
+    onMountChanged(listener: (status: MountStatus) => void): Promise<() => void>;
     /** Searches this device's index of the user's STASH; `refresh` re-reads the file list first. */
     search(query: string, refresh?: boolean): Promise<SearchResponse>;
     /** Cloud usage by media kind across the user's committed files. */
@@ -30,7 +32,12 @@ export type DesktopGateway = {
     /** Recent Stashes, most recent first. */
     listStashes(): Promise<StashSummary[]>;
   };
-  device: { info(): Promise<DeviceInfo> };
+  device: {
+    info(): Promise<DeviceInfo>;
+    /** Starting with Windows and reconnecting S:, saved on this workstation. */
+    preferences(): Promise<Preferences>;
+    setPreferences(choice: { launchAtLogin: boolean; mountAtLaunch: boolean }): Promise<Preferences>;
+  };
   stash: {
     /** Opens the native picker, optionally starting in a known folder. */
     selectSource(kind: "file" | "folder", start?: StashStart): Promise<SourceSummary>;

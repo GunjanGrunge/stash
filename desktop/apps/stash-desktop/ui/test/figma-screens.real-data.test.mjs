@@ -23,7 +23,11 @@ test("Transfers shows the live Stash and a measured speed, never a fixed one", a
 
 test("Settings only offers what works today; the rest says Coming soon", async () => {
   const screen = await read("../src/components/SettingsScreen.tsx");
-  assert.match(screen, /title="Launch STASH at sign in"[^\n]*soon[^\n]*disabled/);
+  // Startup and reconnecting S: are real, saved on this workstation.
+  assert.match(screen, /title="Launch STASH at sign in"[^\n]*checked=\{prefs\?\.launchAtLogin[^\n]*onChange=/);
+  assert.match(screen, /title="Mount S: when STASH starts"[^\n]*checked=\{prefs\?\.mountAtLaunch[^\n]*onChange=/);
+  assert.match(screen, /gateway\.device\.preferences\(\)/);
+  assert.doesNotMatch(screen, /title="Launch STASH at sign in"[^\n]*soon/);
   assert.match(screen, /title="Pause on metered networks"[^\n]*soon[^\n]*disabled/);
   assert.match(screen, /<SettingValue>S:\\<\/SettingValue>/);
   assert.match(screen, /gateway\.library\.storageBreakdown\(\)/);
