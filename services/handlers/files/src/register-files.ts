@@ -15,7 +15,10 @@ import type { EntityRecord, FileRecord, FolderRecord, RegisterFileInput } from "
 interface SelectedRootLookup {
   getStash(userId: string, stashId: string): Promise<{
     state: string;
+    /** Present when a folder was Stashed: created (or reused) at the destination. */
     manifestFolderName?: string;
+    /** The existing folder the Stash lands in; absent means the top level. */
+    parentFolderId?: string;
   } | undefined>;
 }
 
@@ -134,7 +137,7 @@ export function registerFiles(deps: { repo: Repository; stashes?: SelectedRootLo
         throw badRequest("stashId must be a non-empty string");
       }
 
-      let selectedStash: { state: string; manifestFolderName?: string } | undefined;
+      let selectedStash: { state: string; manifestFolderName?: string; parentFolderId?: string } | undefined;
       if (deps.stashes !== undefined) {
         // The entry point supplies this lookup. Only that deployed HTTP
         // composition has a route parameter; direct handler tests exercise
@@ -146,9 +149,6 @@ export function registerFiles(deps: { repo: Repository; stashes?: SelectedRootLo
         selectedStash = await deps.stashes.getStash(userId, stashId);
         if (selectedStash === undefined || selectedStash.state !== "open") {
           throw badRequest("stashId does not identify an open Stash");
-        }
-        if (selectedStash.manifestFolderName === undefined) {
-          throw badRequest("Stash has no selected root folder");
         }
       }
 
@@ -207,17 +207,37 @@ export function registerFiles(deps: { repo: Repository; stashes?: SelectedRootLo
       const newFolders: FolderRecord[] = [];
       const files: FileRecord[] = [];
 
-      let selectedRootId: string | null = null;
+      // Destination: the chosen existing folder, or the top level. It must be
+      // the caller's own, active folder (a trashed one would hide the files).
+      let destinationId: string | null = null;
+      let destinationPath = "";
+      if (selectedStash?.parentFolderId !== undefined) {
+        const destination = await deps.repo.findFolderById(userId, selectedStash.parentFolderId);
+        if (destination === undefined || destination.state === "trashed" || destination.state === "purging") {
+          throw badRequest("the destination folder does not exist");
+        }
+        destinationId = destination.folderId;
+        destinationPath = destination.relativePath;
+      }
+      const joinPath = (base: string, rest: string) => (base === "" ? rest : `${base}/${rest}`);
+
+      // A Stashed FOLDER is created (or reused) at the destination and its
+      // contents go inside it. Loose FILES land directly in the destination:
+      // a file stays a file, never wrapped in a folder of its own name.
+      let selectedRootId: string | null = destinationId;
+      let rootPath = destinationPath;
       if (selectedStash?.manifestFolderName !== undefined) {
-        const existingRoot = await deps.repo.findFolder(userId, null, selectedStash.manifestFolderName);
+        const folderName = selectedStash.manifestFolderName;
+        rootPath = joinPath(destinationPath, folderName);
+        const existingRoot = await deps.repo.findFolder(userId, destinationId, folderName);
         if (existingRoot !== undefined) {
           selectedRootId = existingRoot.folderId;
         } else {
           selectedRootId = randomUUID();
           newFolders.push({ pk, sk: `FOLDER#${selectedRootId}`, entity: "FOLDER", folderId: selectedRootId,
-            name: selectedStash.manifestFolderName, parentFolderId: null,
-            relativePath: selectedStash.manifestFolderName, gsi1pk: `${pk}#PARENT#ROOT`,
-            gsi1sk: selectedStash.manifestFolderName });
+            name: folderName, parentFolderId: destinationId,
+            relativePath: rootPath, gsi1pk: `${pk}#PARENT#${destinationId ?? "ROOT"}`,
+            gsi1sk: folderName });
         }
       }
 
@@ -249,7 +269,8 @@ export function registerFiles(deps: { repo: Repository; stashes?: SelectedRootLo
             folderId,
             name: dir,
             parentFolderId,
-            relativePath: prefix,
+            // Full path from the top of the user's STASH, not from the Stash root.
+            relativePath: joinPath(rootPath, prefix),
             gsi1pk: `${pk}#PARENT#${parentFolderId ?? "ROOT"}`,
             gsi1sk: dir,
           });

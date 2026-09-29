@@ -100,6 +100,26 @@ struct SourceManifest {
     summary: SourceSummary,
     entries: Vec<ManifestEntry>,
     cleanup_on_success: bool,
+    /// A folder was chosen: it is created at the destination with its exact
+    /// structure. Otherwise the file lands as itself, never wrapped.
+    is_folder: bool,
+    /// Existing STASH folder the Stash lands in; `None` is the top level.
+    destination: Option<String>,
+}
+
+/// The `POST /stashes` body. Only a folder Stash names a folder.
+fn create_stash_body(manifest: &SourceManifest) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "manifestTotalBytes": manifest.summary.total_bytes,
+        "manifestFileCount": manifest.summary.file_count,
+    });
+    if manifest.is_folder {
+        body["manifestFolderName"] = serde_json::Value::String(manifest.summary.folder_name.clone());
+    }
+    if let Some(parent) = &manifest.destination {
+        body["parentFolderId"] = serde_json::Value::String(parent.clone());
+    }
+    body
 }
 
 #[derive(Clone)]
@@ -414,18 +434,13 @@ async fn transfer(
     set_phase(&shared, TransferPhase::Preparing, None)?;
     let api = crate::api::UploadApi::new();
     let stash: CreateStashResponse = api
-        .post(
-            "/stashes",
-            &serde_json::json!({
-                "manifestTotalBytes": manifest.summary.total_bytes,
-                "manifestFileCount": manifest.summary.file_count,
-                "manifestFolderName": manifest.summary.folder_name,
-            }),
-            Some(idempotency_key("create")),
-        )
+        .post("/stashes", &create_stash_body(&manifest), Some(idempotency_key("create")))
         .await?;
     let stash_id = stash.stash_id.clone();
-    let check: ManifestCheckResponse = match api
+    // The duplicate-folder check compares whole folders; loose files skip it.
+    let check: ManifestCheckResponse = if !manifest.is_folder {
+        ManifestCheckResponse::None(NoneResponse {})
+    } else { match api
         .post(
             &format!("/stashes/{stash_id}/manifest-check"),
             &serde_json::json!({
@@ -438,7 +453,7 @@ async fn transfer(
     {
         Ok(value) => value,
         Err(error) => { let _ = api.post_value(&format!("/stashes/{stash_id}/cancel"), &serde_json::json!({}), None).await; return Err(error); }
-    };
+    } };
     check_canceled_or_cancel(&api, &stash_id, &cancel).await?;
     let entries: Vec<ManifestEntry> = match check {
         ManifestCheckResponse::Exact(response) => {
@@ -797,6 +812,8 @@ fn build_manifest(root: PathBuf) -> Result<SourceManifest, String> {
         },
         entries,
         cleanup_on_success: false,
+        is_folder: metadata.is_dir(),
+        destination: None,
     })
 }
 
@@ -825,6 +842,9 @@ fn build_spool_manifest(root: PathBuf, source_name: String) -> Result<SourceMani
         },
         entries: vec![entry],
         cleanup_on_success: false,
+        // A file written onto S: is a file: it lands as itself.
+        is_folder: false,
+        destination: None,
     })
 }
 
@@ -910,6 +930,53 @@ fn pick_native_path(_kind: &str, _start: Option<&str>) -> Result<PathBuf, String
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("stash-body-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_single_file_is_stashed_as_itself_not_wrapped_in_a_folder() {
+        let dir = scratch("file");
+        let file = dir.join("mushroom2.png");
+        std::fs::write(&file, b"png").unwrap();
+        let manifest = build_manifest(file).unwrap();
+        let body = create_stash_body(&manifest);
+        assert!(body.get("manifestFolderName").is_none(), "a file must not become a folder: {body}");
+        assert!(body.get("parentFolderId").is_none());
+        assert_eq!(manifest.entries[0].relative_path, "mushroom2.png");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_folder_is_stashed_as_that_folder_with_its_structure() {
+        let dir = scratch("folder");
+        let pack = dir.join("K Samples");
+        std::fs::create_dir_all(pack.join("Kicks")).unwrap();
+        std::fs::write(pack.join("Kicks").join("kick.wav"), b"k").unwrap();
+        std::fs::write(pack.join("snare.wav"), b"s").unwrap();
+        let manifest = build_manifest(pack).unwrap();
+        let body = create_stash_body(&manifest);
+        assert_eq!(body["manifestFolderName"], "K Samples");
+        let mut paths: Vec<_> = manifest.entries.iter().map(|e| e.relative_path.clone()).collect();
+        paths.sort();
+        assert_eq!(paths, vec!["Kicks/kick.wav", "snare.wav"], "paths are inside the folder, not re-prefixed");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_destination_folder_is_sent_when_set() {
+        let dir = scratch("dest");
+        let file = dir.join("take.wav");
+        std::fs::write(&file, b"t").unwrap();
+        let mut manifest = build_manifest(file).unwrap();
+        manifest.destination = Some("folder-123".into());
+        assert_eq!(create_stash_body(&manifest)["parentFolderId"], "folder-123");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     /// The webview gateway rejects anything but these camelCase names
     /// (`sourceSummary` / `transferStatus` in `ui/src/platform/tauri/gateway.ts`).

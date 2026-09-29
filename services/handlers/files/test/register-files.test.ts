@@ -147,6 +147,88 @@ describe("registerFiles", () => {
     expect(repo.all()).toHaveLength(0);
   });
 
+  // --- Where a Stash lands: a file stays a file; folders keep their shape ---
+
+  function stashOf(stash: { manifestFolderName?: string; parentFolderId?: string }) {
+    return { getStash: async () => ({ state: "open", ...stash }) };
+  }
+
+  function folderRecord(folderId: string, name: string, parentFolderId: string | null, relativePath: string, state?: "trashed"): FolderRecord {
+    return {
+      pk: `USER#${USER}`, sk: `FOLDER#${folderId}`, entity: "FOLDER", folderId, name, parentFolderId, relativePath,
+      gsi1pk: `USER#${USER}#PARENT#${parentFolderId ?? "ROOT"}`, gsi1sk: name, ...(state ? { state } : {}),
+    } as FolderRecord;
+  }
+
+  const register = (body: Record<string, unknown>) => event({ stashId: "stash-1", ...body });
+
+  it("puts a loose file at the top level as a file, with no wrapper folder", async () => {
+    const repo = new MemoryRepository();
+    const res = await registerFiles({ repo, stashes: stashOf({}) })(
+      register({ files: [{ relativePath: "mushroom2.png", sizeBytes: 5, checksum: "m" }] }),
+    );
+    expect(res.statusCode).toBe(201);
+    expect(repo.all().filter((i) => i.entity === "FOLDER")).toEqual([]);
+    const file = repo.all().filter((i): i is FileRecord => i.entity === "FILE")[0]!;
+    expect(file.name).toBe("mushroom2.png");
+    expect(file.parentFolderId).toBe("ROOT");
+    expect(file.gsi1pk).toBe(`USER#${USER}#PARENT#ROOT`);
+  });
+
+  it("puts loose files inside the chosen destination folder", async () => {
+    const repo = new MemoryRepository();
+    await repo.putEntities([folderRecord("dest", "Beats", null, "Beats")]);
+    const res = await registerFiles({ repo, stashes: stashOf({ parentFolderId: "dest" }) })(
+      register({ files: [{ relativePath: "take.wav", sizeBytes: 5, checksum: "t" }] }),
+    );
+    expect(res.statusCode).toBe(201);
+    const file = repo.all().filter((i): i is FileRecord => i.entity === "FILE")[0]!;
+    expect(file.parentFolderId).toBe("dest");
+    expect(repo.all().filter((i) => i.entity === "FOLDER")).toHaveLength(1);
+  });
+
+  it("creates a Stashed folder inside the chosen destination and keeps its exact structure", async () => {
+    const repo = new MemoryRepository();
+    await repo.putEntities([folderRecord("dest", "Libraries", null, "Libraries")]);
+    const res = await registerFiles({ repo, stashes: stashOf({ parentFolderId: "dest", manifestFolderName: "K Samples" }) })(
+      register({ files: [
+        { relativePath: "Kicks/kick.wav", sizeBytes: 1, checksum: "k" },
+        { relativePath: "snare.wav", sizeBytes: 1, checksum: "s" },
+      ] }),
+    );
+    expect(res.statusCode).toBe(201);
+    const folders = repo.all().filter((i): i is FolderRecord => i.entity === "FOLDER");
+    const byPath = new Map(folders.map((f) => [f.relativePath, f]));
+    expect([...byPath.keys()].sort()).toEqual(["Libraries", "Libraries/K Samples", "Libraries/K Samples/Kicks"]);
+    const kSamples = byPath.get("Libraries/K Samples")!;
+    expect(kSamples.parentFolderId).toBe("dest");
+    expect(byPath.get("Libraries/K Samples/Kicks")!.parentFolderId).toBe(kSamples.folderId);
+    const snare = repo.all().find((i): i is FileRecord => i.entity === "FILE" && i.name === "snare.wav")!;
+    expect(snare.parentFolderId).toBe(kSamples.folderId);
+  });
+
+  it("a folder Stashed at the top level is not wrapped again and keeps full paths", async () => {
+    const repo = new MemoryRepository();
+    const res = await registerFiles({ repo, stashes: stashOf({ manifestFolderName: "K Samples" }) })(
+      register({ files: [{ relativePath: "Kicks/kick.wav", sizeBytes: 1, checksum: "k" }] }),
+    );
+    expect(res.statusCode).toBe(201);
+    const paths = repo.all().filter((i): i is FolderRecord => i.entity === "FOLDER").map((f) => f.relativePath).sort();
+    expect(paths).toEqual(["K Samples", "K Samples/Kicks"]);
+  });
+
+  it("refuses a destination that does not exist or is in Trash, writing nothing", async () => {
+    for (const setup of [[], [folderRecord("dest", "Old", null, "Old", "trashed")]]) {
+      const repo = new MemoryRepository();
+      await repo.putEntities(setup);
+      const res = await registerFiles({ repo, stashes: stashOf({ parentFolderId: "dest" }) })(
+        register({ files: [{ relativePath: "a.wav", sizeBytes: 1, checksum: "a" }] }),
+      );
+      expect(res.statusCode).toBe(400);
+      expect(repo.all().filter((i) => i.entity === "FILE")).toEqual([]);
+    }
+  });
+
   it("rejects a body stashId that differs from the authoritative path id", async () => {
     const repo = new MemoryRepository();
     const stashes = {
