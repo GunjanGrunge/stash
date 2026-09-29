@@ -1,18 +1,26 @@
 //! The desktop shell owns the welcome window, Cognito sign-in, and the
-//! process-lifetime mount controller. Closing the window hides it to the tray;
-//! only an explicit unmount or quit detaches the live WinFsp host.
+//! process-lifetime mount controller. STASH lives in the tray: closing the
+//! window closes only the window (its web view's memory is freed) while the
+//! drive and uploads keep running; only Quit or Unmount detaches the live
+//! WinFsp host. At launch STASH restores the session, resumes unfinished
+//! uploads and reconnects S: as the creator's settings say, with or without
+//! a window (a start at Windows sign-in opens none).
 
 mod api;
 mod auth;
 mod device;
+mod events;
 mod mount;
+mod prefs;
+mod preview;
 mod search;
+mod startup;
 mod upload;
 
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
-    AppHandle, DragDropEvent, Emitter, Manager, WindowEvent,
+    AppHandle, DragDropEvent, Emitter, Manager, RunEvent, WebviewWindowBuilder, WindowEvent,
 };
 
 const TRAY_ID: &str = "stash-tray";
@@ -43,10 +51,23 @@ fn tray_command_unmounts(command: TrayCommand) -> bool {
     matches!(command, TrayCommand::Unmount | TrayCommand::Quit)
 }
 
+/// Shows the main window, opening a fresh one if it was closed to the tray.
 fn show_stash(app: &AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "STASH's main window is unavailable.".to_string())?;
+    let window = match app.get_webview_window("main") {
+        Some(window) => window,
+        None => {
+            let config = app
+                .config()
+                .app
+                .windows
+                .first()
+                .cloned()
+                .ok_or_else(|| "STASH's main window is unavailable.".to_string())?;
+            WebviewWindowBuilder::from_config(app, &config)
+                .and_then(|builder| builder.build())
+                .map_err(|error| error.to_string())?
+        }
+    };
     window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())
 }
@@ -54,8 +75,16 @@ fn show_stash(app: &AppHandle) -> Result<(), String> {
 fn handle_tray_command(app: &AppHandle, command: TrayCommand) {
     if tray_command_unmounts(command) {
         let result = app.state::<mount::MountController>().unmount();
-        if let Err(error) = result {
-            eprintln!("Couldn't unmount STASH: {error}");
+        match result {
+            Ok(status) => {
+                // Unmount is the creator's choice and is remembered; Quit is
+                // not, so S: comes back the next time STASH starts.
+                if command == TrayCommand::Unmount {
+                    app.state::<prefs::PreferenceStore>().remember_mounted(false);
+                    let _ = app.emit(mount::MOUNT_EVENT, status);
+                }
+            }
+            Err(error) => eprintln!("Couldn't unmount STASH: {error}"),
         }
         if command == TrayCommand::Quit {
             app.exit(0);
@@ -108,15 +137,60 @@ fn build_tray(app: &mut tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// What STASH does as it starts, window or not: restore the saved sign-in,
+/// pick up uploads from S: that had not landed, and reconnect S: if the
+/// creator's settings say so. Without a saved sign-in it waits for sign-in.
+async fn resume_at_launch(app: AppHandle) {
+    if !matches!(auth::restore_session().await, Ok(auth::RestoreOutcome::SignedIn)) {
+        return;
+    }
+    app.state::<upload::UploadController>().resume_saved_uploads();
+    if app.state::<prefs::PreferenceStore>().get().mounts_at_launch() {
+        match app.state::<mount::MountController>().mount().await {
+            Ok(status) => {
+                let _ = app.emit(mount::MOUNT_EVENT, status);
+            }
+            Err(error) => eprintln!("Couldn't reconnect S: at launch: {error}"),
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let uploads = upload::UploadController::default();
-    tauri::Builder::default()
+    let started_at_login = startup::launched_at_login(std::env::args());
+    let app = tauri::Builder::default()
+        // Opening STASH while it runs in the tray shows the running one; a
+        // second process would fight over S: and the upload queue.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Err(error) = show_stash(app) {
+                eprintln!("Couldn't show STASH: {error}");
+            }
+        }))
+        // Previews stream from here; each request runs off the UI thread.
+        .register_asynchronous_uri_scheme_protocol(preview::SCHEME, |_ctx, request, responder| {
+            std::thread::spawn(move || responder.respond(preview::respond(&request)));
+        })
         .manage(mount::MountController::with_uploads(uploads.clone()))
         .manage(uploads)
         .manage(search::SearchController::default())
-        .setup(|app| {
+        .setup(move |app| {
+            let preferences = app.path().app_config_dir().ok().map(|dir| dir.join("preferences.json"));
+            let store = prefs::PreferenceStore::load(preferences);
+            // Keeps the Run entry pointing at this executable (or removed).
+            if let Err(error) = startup::set_launch_at_login(store.get().launch_at_login) {
+                eprintln!("{error}");
+            }
+            app.manage(store);
+            events::init(app.handle());
             build_tray(app)?;
+            // A start at Windows sign-in stays in the tray; otherwise open the window.
+            if !started_at_login {
+                if let Err(error) = show_stash(app.handle()) {
+                    eprintln!("Couldn't open STASH: {error}");
+                }
+            }
+            tauri::async_runtime::spawn(resume_at_launch(app.handle().clone()));
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -124,12 +198,9 @@ pub fn run() {
                 return;
             }
             match event {
-                WindowEvent::CloseRequested { api, .. } => {
-                    api.prevent_close();
-                    if let Err(error) = window.hide() {
-                        eprintln!("Couldn't hide STASH to the tray: {error}");
-                    }
-                }
+                // Closing lets the window go (freeing its web view); STASH
+                // itself keeps running in the tray, see `RunEvent` below.
+                WindowEvent::CloseRequested { .. } => {}
                 WindowEvent::DragDrop(DragDropEvent::Enter { .. })
                 | WindowEvent::DragDrop(DragDropEvent::Over { .. }) => {
                     let _ = window.emit(
@@ -198,10 +269,21 @@ pub fn run() {
             upload::select_stash_source,
             upload::confirm_stash,
             upload::get_transfer_status,
-            upload::cancel_stash
+            upload::cancel_stash,
+            prefs::get_preferences,
+            prefs::set_preferences,
+            preview::describe_file,
+            preview::open_on_drive
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running the STASH desktop shell");
+        .build(tauri::generate_context!())
+        .expect("error while building the STASH desktop shell");
+    app.run(|_app, event| {
+        // The last window closing is not a reason to quit: STASH stays in the
+        // tray. Quit (an explicit exit code) still exits.
+        if let RunEvent::ExitRequested { code: None, api, .. } = event {
+            api.prevent_exit();
+        }
+    });
 }
 
 #[cfg(test)]

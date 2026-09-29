@@ -44,6 +44,26 @@ test("Search filters are built only from the returned files and narrow them", ()
   assert.deepEqual(runtime.facetGroups([]), [], "no files, no made-up filters");
 });
 
+test("previews stream only known types, from the app's own stash.localhost", () => {
+  assert.equal(runtime.previewKindOf("Kick_G#_128.WAV"), "audio");
+  assert.equal(runtime.previewKindOf("brief.pdf"), "pdf");
+  assert.equal(runtime.previewKindOf("setup.exe"), null);
+  assert.equal(runtime.previewUrl("k1", "Kick.wav", 4800), "http://stash.localhost/k1/4800/wav");
+  assert.equal(runtime.previewUrl("../x", "Kick.wav", 4800), null, "an id can't escape its path");
+  assert.equal(runtime.previewUrl("k1", "notes.docx", 10), null);
+  assert.equal(runtime.previewUrl("k1", "Kick.wav", 0), null);
+});
+
+test("the player shows Figma time and a waveform from real samples", () => {
+  assert.equal(runtime.clock(2.46), "00:02.46");
+  assert.equal(runtime.clock(125.5), "02:05.50");
+  assert.equal(runtime.clock(Number.NaN), "00:00.00");
+  const loudThenQuiet = new Float32Array(3200).map((_, i) => (i < 1600 ? 0.8 : 0.2));
+  const bars = runtime.peaks([loudThenQuiet], 2);
+  assert.deepEqual(bars.map((b) => Math.round(b * 100)), [100, 25]);
+  assert.deepEqual(runtime.peaks([new Float32Array(0)], 10), []);
+});
+
 test("gateway property harness uses only fake invoke and never a browser/backend transport", async () => {
   const result = await runtime.runGatewayProperties();
   assert.equal(result.seeds[0], 0x1a2b3c4d);

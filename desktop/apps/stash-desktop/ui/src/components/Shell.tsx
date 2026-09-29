@@ -54,6 +54,26 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
     void gateway.library.mountStatus().then((data) => setMount({ status: "ready", data })).catch((error) => setMount({ status: "offline", message: safeActionError(error, "Mount unavailable") }));
   };
 
+  // S: can connect without this window asking (at launch) or drop from the tray.
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void gateway.library.onMountChanged((data) => { if (active) setMount({ status: "ready", data }); }).then((cleanup) => { if (active) unlisten = cleanup; else cleanup(); });
+    return () => { active = false; unlisten?.(); };
+  }, [gateway]);
+
+  // Storage used follows uploads and deletes, once per burst of changes.
+  useEffect(() => {
+    let active = true;
+    let pending: number | undefined;
+    let unlisten: (() => void) | undefined;
+    void gateway.library.onLibraryChanged(() => {
+      window.clearTimeout(pending);
+      pending = window.setTimeout(() => { if (active) loadUsage(); }, 2_000);
+    }).then((cleanup) => { if (active) unlisten = cleanup; else cleanup(); });
+    return () => { active = false; unlisten?.(); window.clearTimeout(pending); };
+  }, [gateway]);
+
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;
@@ -127,9 +147,9 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
       />
     );
   } else if (active === "Files") {
-    mainContent = <FilesScreen gateway={gateway} onUsage={(data) => setUsage({ status: "ready", data })} onMount={(data) => setMount({ status: "ready", data })} onStash={openStash} />;
+    mainContent = <FilesScreen gateway={gateway} mounted={mounted} onUsage={(data) => setUsage({ status: "ready", data })} onMount={(data) => setMount({ status: "ready", data })} onStash={openStash} />;
   } else if (active === "Search") {
-    mainContent = <SearchScreen key={searchQuery.at} gateway={gateway} initialQuery={searchQuery.text} />;
+    mainContent = <SearchScreen key={searchQuery.at} gateway={gateway} initialQuery={searchQuery.text} mounted={mounted} />;
   } else if (active === "Recent Stashes") {
     mainContent = <UnavailableScreen title="Recent Stashes" message="Recent Stashes is not connected in this build yet. STASH will not invent or reuse another view for this destination." notice={notice} />;
   } else if (active === "Transfers") {

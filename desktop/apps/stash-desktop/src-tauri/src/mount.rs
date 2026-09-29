@@ -142,12 +142,16 @@ impl Library for ApiLibrary {
             .send()
             .map_err(|_| ReadError::Offline)?;
         match response.status().as_u16() {
-            200..=299 => response
-                .json::<Value>()
-                .ok()
-                .and_then(|body| body.get("folderId").and_then(Value::as_str).map(str::to_string))
-                .filter(|id| safe_folder_id(id))
-                .ok_or(ReadError::Io),
+            200..=299 => {
+                let id = response
+                    .json::<Value>()
+                    .ok()
+                    .and_then(|body| body.get("folderId").and_then(Value::as_str).map(str::to_string))
+                    .filter(|id| safe_folder_id(id))
+                    .ok_or(ReadError::Io)?;
+                crate::events::library_changed();
+                Ok(id)
+            }
             401 | 403 => Err(ReadError::LeaseExpired),
             _ => Err(ReadError::Io),
         }
@@ -163,7 +167,10 @@ impl Library for ApiLibrary {
             .send()
             .map_err(|_| ReadError::Offline)?;
         match response.status().as_u16() {
-            200..=299 => Ok(()),
+            200..=299 => {
+                crate::events::library_changed();
+                Ok(())
+            }
             401 | 403 => Err(ReadError::LeaseExpired),
             _ => Err(ReadError::Io),
         }
@@ -271,6 +278,11 @@ impl LeaseSource for ApiLeaseSource {
 }
 
 impl ApiLeaseSource {
+    /// Leases for one committed file; `file_id` must already be validated.
+    pub(crate) fn for_file(file_id: &str) -> Self {
+        Self { file_id: file_id.to_string() }
+    }
+
     fn fetch(&self) -> Result<String, ReadError> {
         let token = crate::auth::id_token().map_err(|_| ReadError::LeaseExpired)?;
         let response = BlockingClient::new()
@@ -432,16 +444,29 @@ pub async fn mount_status(state: tauri::State<'_, MountController>) -> Result<Mo
     Ok(state.status())
 }
 
+/// Tells an open window the drive changed without it asking (a launch-time
+/// remount, or Unmount from the tray).
+pub const MOUNT_EVENT: &str = "stash-mount";
+
+/// The creator's own mount and unmount are remembered for the next launch.
 #[tauri::command]
-pub async fn mount_stash(state: tauri::State<'_, MountController>) -> Result<MountStatus, String> {
-    state.mount().await
+pub async fn mount_stash(
+    state: tauri::State<'_, MountController>,
+    prefs: tauri::State<'_, crate::prefs::PreferenceStore>,
+) -> Result<MountStatus, String> {
+    let status = state.mount().await?;
+    prefs.remember_mounted(true);
+    Ok(status)
 }
 
 #[tauri::command]
 pub async fn unmount_stash(
     state: tauri::State<'_, MountController>,
+    prefs: tauri::State<'_, crate::prefs::PreferenceStore>,
 ) -> Result<MountStatus, String> {
-    state.unmount()
+    let status = state.unmount()?;
+    prefs.remember_mounted(false);
+    Ok(status)
 }
 
 #[cfg(test)]

@@ -116,7 +116,7 @@ pub(crate) fn key_label(key: MusicalKey) -> String {
     format!("{}{mode}", PITCHES[key.pitch as usize % 12])
 }
 
-fn kind_label(kind: Option<MediaKind>) -> &'static str {
+pub(crate) fn kind_label(kind: Option<MediaKind>) -> &'static str {
     match kind {
         Some(MediaKind::Audio) => "audio",
         Some(MediaKind::Midi) => "midi",

@@ -5,10 +5,11 @@ import type { SearchHit, SearchResponse } from "../domain/types";
 import type { DesktopGateway } from "../platform/contracts";
 import { safeActionError } from "../platform/tauri/gateway";
 import { formatBytes } from "./FilesScreen";
+import { AssetDetailsScreen } from "./AssetDetailsScreen";
 import { MaskIcon } from "./NavigationRail";
 import { AssetRow, EmptyRow, InfoBar, Screen } from "./ui";
 
-type Props = { gateway: DesktopGateway; initialQuery?: string };
+type Props = { gateway: DesktopGateway; initialQuery?: string; mounted?: boolean };
 
 type SearchState =
   | { status: "idle" }
@@ -76,10 +77,11 @@ export function applyFacets(hits: SearchHit[], chosen: Partial<Record<FacetId, s
   return hits.filter((hit) => FACETS.every(({ id, value }) => !chosen[id] || value(hit) === chosen[id]));
 }
 
-export function SearchScreen({ gateway, initialQuery = "" }: Props) {
+export function SearchScreen({ gateway, initialQuery = "", mounted = false }: Props) {
   const [query, setQuery] = useState(initialQuery);
   const [state, setState] = useState<SearchState>({ status: "idle" });
   const [chosen, setChosen] = useState<Partial<Record<FacetId, string>>>({});
+  const [previewing, setPreviewing] = useState<SearchHit | null>(null);
   const request = useRef(0);
   const input = useRef<HTMLInputElement>(null);
 
@@ -109,6 +111,11 @@ export function SearchScreen({ gateway, initialQuery = "" }: Props) {
   const facets = useMemo(() => facetGroups(data?.hits ?? []), [data]);
   const shown = useMemo(() => applyFacets(data?.hits ?? [], chosen), [data, chosen]);
   const filtering = Object.values(chosen).some(Boolean);
+
+  if (previewing) {
+    const folders = previewing.path.split(/[\\/]/).filter(Boolean).slice(0, -1);
+    return <AssetDetailsScreen gateway={gateway} asset={{ fileId: previewing.fileId, name: previewing.name, sizeBytes: previewing.sizeBytes, folders }} mounted={mounted} onBack={() => setPreviewing(null)} />;
+  }
 
   return (
     <Screen label="Search">
@@ -194,6 +201,7 @@ export function SearchScreen({ gateway, initialQuery = "" }: Props) {
                   meta={[folderOf(hit), ...detailLabels(hit)].join(" · ")}
                   type={`${typeLabel(hit)} · ${formatBytes(hit.sizeBytes)}`}
                   waveform={hit.kind === "audio"}
+                  onOpen={() => setPreviewing(hit)}
                 />
               ))
             )}

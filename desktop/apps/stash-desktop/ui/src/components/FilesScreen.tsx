@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { CapabilityState, ChildItem, FolderLocation, MountStatus, SortDirection, SortKey, Usage } from "../domain/types";
 import type { DesktopGateway } from "../platform/contracts";
 import { safeActionError } from "../platform/tauri/gateway";
-import { Breadcrumb } from "./ui";
+import { AssetDetailsScreen } from "./AssetDetailsScreen";
+import { Breadcrumb, StateTag } from "./ui";
 
 export function formatBytes(value?: number | null): string {
   if (value == null || !Number.isFinite(value)) return "—";
@@ -15,6 +16,16 @@ export function formatBytes(value?: number | null): string {
 }
 
 const kindOf = (item: ChildItem) => item.entity === "FOLDER" ? "Folder" : "File";
+
+const LIVE_REFRESH_DEBOUNCE_MS = 300;
+/** Changes from other devices have no local signal; check this often while visible. */
+const OTHER_DEVICES_POLL_MS = 15_000;
+
+/** A file copied onto S: that has not finished uploading (rows the app adds locally). */
+export const isInFlight = (item: ChildItem) => item.state === "uploading" || item.state === "queued";
+
+/** A Stashed file (not a folder, not still uploading) can open in Asset details. */
+const canPreview = (item: ChildItem) => item.entity === "FILE" && Boolean(item.fileId) && !isInFlight(item);
 
 const mediaKindOf = (item: ChildItem): string =>
   item.entity === "FOLDER" ? "Folder"
@@ -29,7 +40,7 @@ const iconFor = (item: ChildItem): string =>
   : item.name.endsWith(".mp4") || item.name.endsWith(".mov") ? "📹"
   : "📄";
 
-export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: DesktopGateway; onUsage: (usage: Usage) => void; onMount: (status: MountStatus) => void; onStash: () => void }) {
+export function FilesScreen({ gateway, mounted, onUsage, onMount, onStash }: { gateway: DesktopGateway; mounted: boolean; onUsage: (usage: Usage) => void; onMount: (status: MountStatus) => void; onStash: () => void }) {
   const [folderId, setFolderId] = useState("ROOT");
   const [path, setPath] = useState<FolderLocation[]>([]);
   const [filesState, setFilesState] = useState<CapabilityState<ChildItem[]>>({ status: "loading" });
@@ -37,7 +48,7 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedType, setSelectedType] = useState<string>("All");
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({ key: "name", direction: "ascending" });
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [previewing, setPreviewing] = useState<ChildItem | null>(null);
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
@@ -64,21 +75,35 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
     loadChildren();
   }, [folderId, gateway]);
 
-  // Changes made on S: (or elsewhere) show up when the creator comes back to
-  // the app. This reload is quiet: no loading flash, and a selection that
-  // still exists stays selected.
+  // The folder stays live like Explorer: it refreshes the moment STASH says
+  // something changed (a delete or copy on S:, an upload landing, an action
+  // here), when the window comes back into view, and every few seconds for
+  // changes made on other devices. Refreshes are quiet: no loading flash, and
+  // a selection that still exists stays selected.
   useEffect(() => {
+    let active = true;
+    let pending: number | undefined;
     const refresh = () => {
-      if (document.visibilityState !== "visible") return;
+      if (!active || document.visibilityState !== "visible") return;
       void gateway.library.listChildren(folderId).then((result) => {
+        if (!active) return;
         const fresh = Array.isArray(result.items) ? result.items : [];
         setFilesState({ status: "ready", data: fresh });
         setSelected((current) => current && (fresh.find((item) => item.entity === current.entity && (item.fileId ?? item.folderId) === (current.fileId ?? current.folderId)) ?? null));
       }).catch(() => undefined);
     };
+    // A folder copy announces hundreds of changes; one refresh covers a burst.
+    const soon = () => { window.clearTimeout(pending); pending = window.setTimeout(refresh, LIVE_REFRESH_DEBOUNCE_MS); };
+    let unlisten: (() => void) | undefined;
+    void gateway.library.onLibraryChanged(soon).then((cleanup) => { if (active) unlisten = cleanup; else cleanup(); });
+    const poll = window.setInterval(refresh, OTHER_DEVICES_POLL_MS);
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", refresh);
     return () => {
+      active = false;
+      unlisten?.();
+      window.clearTimeout(pending);
+      window.clearInterval(poll);
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", refresh);
     };
@@ -159,7 +184,6 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
 
   const selectItem = (item: ChildItem) => {
     setSelected(item);
-    setIsPlaying(false);
     setIsFavorite(false);
     setTags([]);
     setTagDraft("");
@@ -176,6 +200,11 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
     e.preventDefault();
     void createFolder();
   };
+
+  if (previewing?.fileId) {
+    const asset = { fileId: previewing.fileId, name: previewing.name, sizeBytes: previewing.sizeBytes ?? 0, folders: path.map((location) => location.name) };
+    return <AssetDetailsScreen gateway={gateway} asset={asset} mounted={mounted} onBack={() => setPreviewing(null)} />;
+  }
 
   return (
     <section className="workspace files-workspace" aria-labelledby="files-heading">
@@ -265,17 +294,17 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
                     key={`${item.entity}-${item.name}-${item.fileId || item.folderId}`}
                     className={selected === item ? "is-selected" : ""}
                     onClick={() => selectItem(item)}
-                    onDoubleClick={() => openFolder(item)}
+                    onDoubleClick={() => (item.entity === "FOLDER" ? openFolder(item) : canPreview(item) && setPreviewing(item))}
                   >
                     <td>
                       <span className="item-icon">{iconFor(item)}</span>
                       <strong>{item.name}</strong>
                     </td>
-                    <td>{mediaKindOf(item)}</td>
+                    <td>{isInFlight(item) ? <StateTag tone="stashing" label={item.state === "uploading" ? "Uploading" : "Queued"} /> : mediaKindOf(item)}</td>
                     <td>{kindOf(item) === "Folder" ? "—" : formatBytes(item.sizeBytes)}</td>
                     <td>
                       <div className="row-actions">
-                        {(item.entity === "FOLDER" ? item.folderId : item.fileId) && (
+                        {!isInFlight(item) && (item.entity === "FOLDER" ? item.folderId : item.fileId) && (
                           <button
                             type="button"
                             className="icon-action-btn"
@@ -306,30 +335,8 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
                 </div>
               </div>
 
-              {(selected.name.endsWith(".wav") || selected.name.endsWith(".mp3")) && (
-                <div className="waveform-box">
-                  <div className="waveform-visualizer" aria-hidden="true">
-                    <span className={`bar bar-1 ${isPlaying ? "animating" : ""}`} />
-                    <span className={`bar bar-2 ${isPlaying ? "animating" : ""}`} />
-                    <span className={`bar bar-3 ${isPlaying ? "animating" : ""}`} />
-                    <span className={`bar bar-4 ${isPlaying ? "animating" : ""}`} />
-                    <span className={`bar bar-5 ${isPlaying ? "animating" : ""}`} />
-                    <span className={`bar bar-6 ${isPlaying ? "animating" : ""}`} />
-                    <span className={`bar bar-7 ${isPlaying ? "animating" : ""}`} />
-                    <span className={`bar bar-8 ${isPlaying ? "animating" : ""}`} />
-                  </div>
-                  <div className="player-controls">
-                    <button
-                      type="button"
-                      className="play-btn"
-                      onClick={() => setIsPlaying(!isPlaying)}
-                      aria-label={isPlaying ? "Pause preview" : "Play preview"}
-                    >
-                      {isPlaying ? "⏸" : "▶"}
-                    </button>
-                    <span className="time-display">0:00</span>
-                  </div>
-                </div>
+              {canPreview(selected) && (
+                <button type="button" className="button button-primary" onClick={() => setPreviewing(selected)}>Preview</button>
               )}
 
               <div className="metadata-list">

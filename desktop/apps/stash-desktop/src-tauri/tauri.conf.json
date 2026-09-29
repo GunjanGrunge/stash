@@ -18,11 +18,12 @@
         "resizable": true,
         "maximizable": true,
         "decorations": false,
-        "center": true
+        "center": true,
+        "create": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: data:; style-src 'self'; script-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://stash.localhost; img-src 'self' asset: data: http://stash.localhost; media-src http://stash.localhost; frame-src http://stash.localhost; object-src 'none'; style-src 'self'; script-src 'self'"
     }
   },
   "bundle": {
