@@ -295,7 +295,11 @@ export class StashApiStack extends cdk.Stack {
       authorizerName: "stash-jwt-authorizer",
     });
 
-    this.httpApi = new HttpApi(this, "StashHttpApi", {
+    // "V2": the original API (logical id `StashHttpApi`, 8ojdkvlefl) was deleted
+    // outside CloudFormation, which then failed every update that touched it.
+    // A new logical id makes CloudFormation create a fresh API and its routes.
+    // The desktop app's DEFAULT_API_URL must follow this API's URL.
+    this.httpApi = new HttpApi(this, "StashHttpApiV2", {
       apiName: "stash-api",
       description: "STASH control plane — public, JWT-only (Addendum A2).",
       defaultAuthorizer: authorizer,

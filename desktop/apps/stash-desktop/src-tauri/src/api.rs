@@ -8,7 +8,7 @@ use reqwest::{Client, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 
-const DEFAULT_API_URL: &str = "https://8ojdkvlefl.execute-api.ap-south-1.amazonaws.com";
+const DEFAULT_API_URL: &str = "https://9fvkogmupj.execute-api.ap-south-1.amazonaws.com";
 
 pub(crate) fn api_url() -> String {
     option_env!("STASH_API_URL")
