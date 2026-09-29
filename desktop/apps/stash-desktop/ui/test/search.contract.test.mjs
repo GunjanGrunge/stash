@@ -24,3 +24,16 @@ test("search screen is honest about what it could not use and where it ran", asy
   assert.match(screen, /role="search"/);
   assert.doesNotMatch(screen, /fetch\(|XMLHttpRequest|window\.alert/);
 });
+
+test("search screen follows the Figma frame with real data only", async () => {
+  const screen = await read("../src/components/SearchScreen.tsx");
+  // Figma "Creator search results": padded screen, hero field, chips, filters, asset rows, info bar.
+  for (const part of ["<Screen label=\"Search\">", "className=\"search-bar\"", "Searching for", "className=\"search-filters\"", "<AssetRow", "<InfoBar"]) {
+    assert.ok(screen.includes(part), `missing ${part}`);
+  }
+  // Chips are how the engine read the query, and the timing is measured here.
+  assert.match(screen, /data\?\.understood/);
+  assert.match(screen, /performance\.now\(\)/);
+  // No availability tag is invented: search does not know a file's offline state.
+  assert.doesNotMatch(screen, /StateTag|Pinned|Available|"Cloud"/);
+});

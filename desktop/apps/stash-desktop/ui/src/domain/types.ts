@@ -90,6 +90,8 @@ export type SearchResponse = {
   hits: SearchHit[];
   total: number;
   unsupported: string[];
+  /** How the query was read, e.g. "Name: kick", "Key: G#", "Tempo: 120–130 BPM". */
+  understood: string[];
   indexedFiles: number;
   truncated: boolean;
 };

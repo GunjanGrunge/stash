@@ -125,7 +125,8 @@ function searchHit(value: unknown): SearchHit | undefined {
 export function searchResponse(value: unknown): SearchResponse {
   if (!isRecord(value) || !Array.isArray(value.hits) || optionalCount(value.total) === null || optionalCount(value.indexedFiles) === null) throw new Error("STASH returned an invalid search result.");
   const unsupported = Array.isArray(value.unsupported) ? value.unsupported.filter((p): p is string => typeof p === "string" && p.length <= 64) : [];
-  return { hits: value.hits.map(searchHit).filter((h): h is SearchHit => h !== undefined), total: value.total as number, unsupported, indexedFiles: value.indexedFiles as number, truncated: value.truncated === true };
+  const understood = Array.isArray(value.understood) ? value.understood.filter((p): p is string => typeof p === "string" && p.length <= 96).slice(0, 12) : [];
+  return { hits: value.hits.map(searchHit).filter((h): h is SearchHit => h !== undefined), total: value.total as number, unsupported, understood, indexedFiles: value.indexedFiles as number, truncated: value.truncated === true };
 }
 
 export function storageBreakdown(value: unknown): StorageBreakdown {

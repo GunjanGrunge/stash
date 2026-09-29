@@ -31,6 +31,19 @@ test("Files breadcrumb follows Figma: STASH root, parent links, current folder, 
   assert.doesNotMatch(runtime.renderBreadcrumb([{ id: "a", name: "A" }]), /ui-breadcrumb-count/, "no count while the folder is loading");
 });
 
+test("Search filters are built only from the returned files and narrow them", () => {
+  const hit = (fileId, extension, key, bpm) => ({ fileId, name: `${fileId}.${extension}`, path: `Pack/${fileId}.${extension}`, sizeBytes: 1, kind: "audio", extension, key, bpm, resolution: null, fps: null });
+  const hits = [hit("a", "wav", "G#", 128), hit("b", "wav", "G#", 124), hit("c", "mp3", "Am", null)];
+  assert.deepEqual(runtime.facetGroups(hits), [
+    { id: "type", title: "File type", values: [{ label: "WAV", count: 2 }, { label: "MP3", count: 1 }] },
+    { id: "key", title: "Key", values: [{ label: "G#", count: 2 }, { label: "Am", count: 1 }] },
+    { id: "tempo", title: "Tempo", values: [{ label: "124 BPM", count: 1 }, { label: "128 BPM", count: 1 }] },
+  ]);
+  assert.deepEqual(runtime.applyFacets(hits, { type: "WAV", tempo: "128 BPM" }).map((h) => h.fileId), ["a"]);
+  assert.equal(runtime.applyFacets(hits, {}).length, 3);
+  assert.deepEqual(runtime.facetGroups([]), [], "no files, no made-up filters");
+});
+
 test("gateway property harness uses only fake invoke and never a browser/backend transport", async () => {
   const result = await runtime.runGatewayProperties();
   assert.equal(result.seeds[0], 0x1a2b3c4d);

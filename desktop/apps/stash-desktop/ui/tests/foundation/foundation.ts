@@ -163,6 +163,8 @@ export function runWritePathUiContracts(): FoundationSummary {
   return { property: "P7 splash cleanup/skip, native drop entry, and explicit unavailable navigation", cases: 4 };
 }
 
+export { applyFacets, facetGroups } from "../../src/components/SearchScreen";
+
 /** Server-rendered Figma breadcrumb, for asserting its real markup. */
 export function renderBreadcrumb(trail: { id: string; name: string }[], itemCount?: number): string {
   return renderToStaticMarkup(createElement(Breadcrumb, { trail, onNavigate: () => undefined, itemCount }));

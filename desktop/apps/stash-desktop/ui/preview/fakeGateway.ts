@@ -45,6 +45,7 @@ const search = (query: string): SearchResponse => ({
     : [],
   total: query.trim() ? 2 : 0,
   unsupported: [],
+  understood: query.trim() ? ["Name: kick", "Key: G#", "Tempo: 120–130 BPM"] : [],
   indexedFiles: 38_412,
   truncated: false,
 });

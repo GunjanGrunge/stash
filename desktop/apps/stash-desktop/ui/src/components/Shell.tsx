@@ -22,10 +22,11 @@ type Props = {
   initialScreen?: NavItem;
   initialStashOpen?: boolean;
   initialSettingsSection?: SettingsSection;
+  initialSearchQuery?: string;
 };
 
 /** Figma frame: 232px sidebar, then a 72px top bar over the active screen. */
-export function Shell({ gateway, username, onSignOut, signOutError = "", initialScreen = "Home", initialStashOpen = false, initialSettingsSection = "General" }: Props) {
+export function Shell({ gateway, username, onSignOut, signOutError = "", initialScreen = "Home", initialStashOpen = false, initialSettingsSection = "General", initialSearchQuery = "" }: Props) {
   const [active, setActive] = useState<NavItem>(initialScreen);
   const [usage, setUsage] = useState<CapabilityState<Usage>>({ status: "loading" });
   const [mount, setMount] = useState<CapabilityState<MountStatus>>({ status: "loading" });
@@ -36,7 +37,7 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
   const [mountActionError, setMountActionError] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [droppedSource, setDroppedSource] = useState<SourceSummary>();
-  const [searchQuery, setSearchQuery] = useState({ text: "", at: 0 });
+  const [searchQuery, setSearchQuery] = useState({ text: initialSearchQuery, at: 0 });
   const [device, setDevice] = useState<DeviceInfo>({ name: "This computer", os: "Windows", appVersion: "" });
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(initialSettingsSection);
 
