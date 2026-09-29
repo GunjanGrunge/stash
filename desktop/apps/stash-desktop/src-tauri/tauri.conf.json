@@ -27,7 +27,16 @@
     }
   },
   "bundle": {
-    "active": false,
-    "icon": ["../../../../brand/icons/windows/STASH.ico"]
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "STASH",
+    "shortDescription": "STASH cloud drive",
+    "icon": ["../../../../brand/icons/windows/STASH.ico"],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "../../../../brand/icons/windows/STASH.ico"
+      }
+    }
   }
 }
