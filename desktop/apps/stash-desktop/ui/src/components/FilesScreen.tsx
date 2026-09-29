@@ -64,6 +64,26 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
     loadChildren();
   }, [folderId, gateway]);
 
+  // Changes made on S: (or elsewhere) show up when the creator comes back to
+  // the app. This reload is quiet: no loading flash, and a selection that
+  // still exists stays selected.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      void gateway.library.listChildren(folderId).then((result) => {
+        const fresh = Array.isArray(result.items) ? result.items : [];
+        setFilesState({ status: "ready", data: fresh });
+        setSelected((current) => current && (fresh.find((item) => item.entity === current.entity && (item.fileId ?? item.folderId) === (current.fileId ?? current.folderId)) ?? null));
+      }).catch(() => undefined);
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [folderId, gateway]);
+
   const items = filesState.status === "ready" || filesState.status === "stale" ? (filesState.data ?? []) : [];
 
   const filteredItems = useMemo(() => {

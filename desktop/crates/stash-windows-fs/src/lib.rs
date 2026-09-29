@@ -610,13 +610,17 @@ impl<L: Library> StashFileSystemContext<L> {
         Ok(())
     }
 
-    /// Carries out a pending delete (Windows' Cleanup step): the item goes to
-    /// STASH Trash and every cached listing is dropped so it disappears now.
+    /// Carries out a delete (Windows' Cleanup step with the delete flag): the
+    /// item goes to STASH Trash and every cached listing is dropped so it
+    /// disappears now.
+    ///
+    /// WinFsp sets the cleanup delete flag only when a delete is still pending
+    /// at the last handle's cleanup, whether it came from SetDelete or from an
+    /// open with FILE_DELETE_ON_CLOSE (which never calls SetDelete). The flag
+    /// is therefore the authority; a retracted SetDelete never reaches here.
     fn perform_delete(&self, context: &Handle<L::Provider>) -> Result<(), ReadError> {
         let Some(key) = Self::delete_key(context) else { return Ok(()) };
-        if !self.pending_deletes.lock().expect("pending deletes lock poisoned").remove(&key) {
-            return Ok(());
-        }
+        self.pending_deletes.lock().expect("pending deletes lock poisoned").remove(&key);
         let result = match context {
             Handle::Dir(Some(id)) => self.library.trash(TrashTarget::Folder(id)),
             Handle::File(file) => self.library.trash(TrashTarget::File(&file.id)),
@@ -716,10 +720,20 @@ impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
     fn open(
         &self,
         file_name: &U16CStr,
-        _create_options: u32,
+        create_options: u32,
         _granted_access: u32,
         file_info: &mut OpenFileInfo,
     ) -> FspResult<Self::FileContext> {
+        const FILE_DELETE_ON_CLOSE: u32 = 0x0000_1000;
+        if create_options & FILE_DELETE_ON_CLOSE != 0 {
+            // The drive root can never be deleted; refuse before WinFsp
+            // records a delete-on-close for it.
+            if root_name(file_name).is_none() {
+                debug_mount_trace("open: delete-on-close refused for root");
+                return Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0));
+            }
+            debug_mount_trace("open: delete-on-close");
+        }
         match self.resolve(file_name).map_err(read_error_to_fsp)? {
             Resolved::Dir(folder) => {
                 *file_info.as_mut() = self.dir_info();
@@ -796,8 +810,9 @@ impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
         if flags & FSP_CLEANUP_DELETE != 0 {
             // Windows can't report a cleanup failure; a failed Trash call
             // simply leaves the item listed on the next refresh.
-            if self.perform_delete(context).is_err() {
-                debug_mount_trace("cleanup: trash failed");
+            match self.perform_delete(context) {
+                Ok(()) => debug_mount_trace("cleanup: delete flag, moved to Trash"),
+                Err(_) => debug_mount_trace("cleanup: delete flag, trash failed"),
             }
         }
         if let Handle::Pending(pending) = context {
@@ -906,6 +921,7 @@ impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
         _new_file_name: &U16CStr,
         _replace_if_exists: bool,
     ) -> FspResult<()> {
+        debug_mount_trace("rename: refused (not supported yet)");
         Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0))
     }
 
@@ -917,8 +933,13 @@ impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
     ) -> FspResult<()> {
         // Deleting on S: moves the item to STASH Trash (recoverable). The
         // drive root and not-yet-submitted writes can't be deleted.
-        self.mark_delete(context, delete_file)
-            .map_err(|_| FspError::NTSTATUS(STATUS_ACCESS_DENIED.0))
+        let result = self.mark_delete(context, delete_file);
+        debug_mount_trace(match (&result, delete_file) {
+            (Ok(()), true) => "set_delete: marked",
+            (Ok(()), false) => "set_delete: retracted",
+            (Err(_), _) => "set_delete: refused",
+        });
+        result.map_err(|_| FspError::NTSTATUS(STATUS_ACCESS_DENIED.0))
     }
 
     /// Explorer and most apps set attributes and times after copying or
@@ -1255,14 +1276,24 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_without_a_pending_delete_trashes_nothing() {
+    fn cleanup_without_the_delete_flag_trashes_nothing() {
         let fs = fs();
         let handle = Handle::File(fs.open_file("kick", 17));
-        fs.perform_delete(&handle).unwrap();
+        fs.cleanup(&handle, None, 0);
         fs.mark_delete(&handle, true).unwrap();
         fs.mark_delete(&handle, false).unwrap(); // Windows may retract a delete.
-        fs.perform_delete(&handle).unwrap();
+        fs.cleanup(&handle, None, 0);
         assert!(fs.library.trashed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn delete_on_close_trashes_without_a_set_delete() {
+        // FILE_DELETE_ON_CLOSE never calls SetDelete; WinFsp only sets the
+        // cleanup delete flag. That flag alone must reach STASH Trash.
+        let fs = fs();
+        let handle = Handle::File(fs.open_file("kick", 17));
+        fs.cleanup(&handle, None, 0x01);
+        assert_eq!(fs.library.trashed.lock().unwrap().len(), 1);
     }
 
     #[test]
