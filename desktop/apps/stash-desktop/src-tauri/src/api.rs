@@ -185,13 +185,27 @@ pub async fn create_folder(name: String, parent_folder_id: String) -> Result<Val
         .await
 }
 
+/// An id is safe to place in a route path: 1–128 of `[A-Za-z0-9_-]`.
+fn safe_route_id(value: &str) -> Option<&str> {
+    let id = value.trim();
+    let valid = !id.is_empty()
+        && id.len() <= 128
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'));
+    valid.then_some(id)
+}
+
 #[tauri::command]
 pub async fn trash_folder(folder_id: String) -> Result<Value, String> {
-    let id = folder_id.trim();
-    if id.is_empty() || id.len() > 128 || id.chars().any(|c| !c.is_ascii_alphanumeric() && !matches!(c, '-' | '_')) {
-        return Err("That folder could not be moved to Trash.".to_string());
-    }
+    let id = safe_route_id(&folder_id)
+        .ok_or_else(|| "That folder could not be moved to Trash.".to_string())?;
     UploadApi::new().delete_value(&format!("/folders/{id}")).await
+}
+
+#[tauri::command]
+pub async fn trash_file(file_id: String) -> Result<Value, String> {
+    let id = safe_route_id(&file_id)
+        .ok_or_else(|| "That file could not be moved to Trash.".to_string())?;
+    UploadApi::new().delete_value(&format!("/files/{id}")).await
 }
 
 #[cfg(test)]
@@ -201,6 +215,14 @@ mod tests {
     #[test]
     fn api_url_has_no_trailing_slash() {
         assert!(!api_url().ends_with('/'));
+    }
+
+    #[test]
+    fn route_ids_cannot_escape_their_path_segment() {
+        assert_eq!(safe_route_id(" file_01-AB "), Some("file_01-AB"));
+        for unsafe_id in ["", "../stashes", "a/b", "a?b", "a b", &"x".repeat(129)] {
+            assert_eq!(safe_route_id(unsafe_id), None, "{unsafe_id:?}");
+        }
     }
 
     #[test]

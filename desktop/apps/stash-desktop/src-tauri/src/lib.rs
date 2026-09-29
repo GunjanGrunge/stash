@@ -188,6 +188,7 @@ pub fn run() {
             api::list_stashes,
             api::create_folder,
             api::trash_folder,
+            api::trash_file,
             search::search_stash,
             search::storage_breakdown,
             device::device_info,

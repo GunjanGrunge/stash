@@ -103,18 +103,22 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
     }
   };
 
-  const trashFolder = async () => {
+  const trashItem = async () => {
     const target = confirmTrash;
-    if (!target?.folderId) return;
+    if (!target) return;
+    const isFolder = target.entity === "FOLDER";
+    const id = isFolder ? target.folderId : target.fileId;
+    if (!id) return;
     setTrashingFolder(true);
     setFolderError("");
     try {
-      await gateway.library.trashFolder(target.folderId);
+      if (isFolder) await gateway.library.trashFolder(id);
+      else await gateway.library.trashFile(id);
       if (selected === target) setSelected(null);
       setConfirmTrash(null);
       loadChildren();
     } catch (error) {
-      setFolderError(safeActionError(error, "STASH couldn't move that folder to Trash."));
+      setFolderError(safeActionError(error, isFolder ? "STASH couldn't move that folder to Trash." : "STASH couldn't move that file to Trash."));
     } finally {
       setTrashingFolder(false);
     }
@@ -194,9 +198,9 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
 
       {confirmTrash && (
         <div className="status-banner banner-warning" role="alert">
-          <span>Move <strong>{confirmTrash.name}</strong> and everything inside it to Trash? It can be restored for 30 days.</span>
+          <span>Move <strong>{confirmTrash.name}</strong>{confirmTrash.entity === "FOLDER" ? " and everything inside it" : ""} to Trash? It can be restored for 30 days.</span>
           <span className="banner-actions">
-            <button type="button" className="button button-danger button-sm" disabled={trashingFolder} onClick={() => void trashFolder()}>
+            <button type="button" className="button button-danger button-sm" disabled={trashingFolder} onClick={() => void trashItem()}>
               {trashingFolder ? "Moving…" : "Move to Trash"}
             </button>
             <button type="button" className="button button-secondary button-sm" disabled={trashingFolder} onClick={() => setConfirmTrash(null)}>Cancel</button>
@@ -252,11 +256,11 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
                     <td>{kindOf(item) === "Folder" ? "—" : formatBytes(item.sizeBytes)}</td>
                     <td>
                       <div className="row-actions">
-                        {item.entity === "FOLDER" && item.folderId && (
+                        {(item.entity === "FOLDER" ? item.folderId : item.fileId) && (
                           <button
                             type="button"
                             className="icon-action-btn"
-                            title="Move folder to Trash"
+                            title={item.entity === "FOLDER" ? "Move folder to Trash" : "Move file to Trash"}
                             aria-label={`Move ${item.name} to Trash`}
                             onClick={(e) => { e.stopPropagation(); setConfirmTrash(item); }}
                           >
