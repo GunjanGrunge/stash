@@ -12,7 +12,7 @@ use stash_s3_provider::HttpRangeProvider;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
-use tauri::http::{header, Request, Response, StatusCode};
+use tauri::http::{header, HeaderValue, Method, Request, Response, StatusCode};
 
 pub const SCHEME: &str = "stash";
 
@@ -147,8 +147,44 @@ fn plain(status: StatusCode, message: &str) -> Response<Vec<u8>> {
         .expect("static response")
 }
 
+/// The app's own page. stash.localhost is another origin to it, so reads with
+/// fetch() (the text view, the audio waveform) need CORS; <img>, <audio>,
+/// <video> and <iframe> don't. No other page may read previews.
+const APP_ORIGINS: [&str; 3] = ["http://tauri.localhost", "https://tauri.localhost", "tauri://localhost"];
+
+fn app_origin(request: &Request<Vec<u8>>) -> Option<&'static str> {
+    let origin = request.headers().get(header::ORIGIN)?.to_str().ok()?;
+    APP_ORIGINS.into_iter().find(|allowed| *allowed == origin)
+}
+
 /// Answers one preview request from the window.
 pub fn respond(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
+    let mut response = if request.method() == Method::OPTIONS {
+        // Preflight for a fetch() that sends a Range header.
+        Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .header(header::ACCESS_CONTROL_ALLOW_METHODS, "GET")
+            .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "Range")
+            .header(header::ACCESS_CONTROL_MAX_AGE, "600")
+            .body(Vec::new())
+            .expect("static response")
+    } else {
+        answer(request)
+    };
+    #[cfg(debug_assertions)]
+    if response.status().is_client_error() || response.status().is_server_error() {
+        eprintln!("[stash-preview] {} {} -> {}", request.method(), request.uri().path(), response.status());
+    }
+    if let Some(origin) = app_origin(request) {
+        let headers = response.headers_mut();
+        headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static(origin));
+        headers.insert(header::ACCESS_CONTROL_EXPOSE_HEADERS, HeaderValue::from_static("Content-Range, Content-Length"));
+        headers.insert(header::VARY, HeaderValue::from_static("Origin"));
+    }
+    response
+}
+
+fn answer(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     let Some(target) = parse_target(request.uri().path()) else {
         return plain(StatusCode::NOT_FOUND, "No preview for this file.");
     };
@@ -272,6 +308,31 @@ mod tests {
         assert_eq!(parse_target("/f_1-a/4800/wav"), Some(Target { file_id: "f_1-a".into(), size: 4800, mime: "audio/wav" }));
         for bad in ["/../x/1/wav", "/f1/abc/wav", "/f1/10/exe", "/f1/10", "/f1/10/wav/extra", "/a%2Fb/1/wav"] {
             assert_eq!(parse_target(bad), None, "{bad}");
+        }
+    }
+
+    fn request(method: &str, path: &str, origin: Option<&str>) -> Request<Vec<u8>> {
+        let mut builder = Request::builder().method(method).uri(format!("http://stash.localhost{path}"));
+        if let Some(origin) = origin {
+            builder = builder.header(header::ORIGIN, origin);
+        }
+        builder.body(Vec::new()).unwrap()
+    }
+
+    #[test]
+    fn only_the_app_page_may_read_previews_with_fetch() {
+        // The text view's fetch() sends Range, so WebView2 asks first.
+        let preflight = respond(&request("OPTIONS", "/f1/155/txt", Some("http://tauri.localhost")));
+        assert_eq!(preflight.status(), StatusCode::NO_CONTENT);
+        assert_eq!(preflight.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "http://tauri.localhost");
+        assert_eq!(preflight.headers()[header::ACCESS_CONTROL_ALLOW_HEADERS], "Range");
+        // Errors carry it too, so the page sees the status instead of a blocked read.
+        let missing = respond(&request("GET", "/f1/155/exe", Some("http://tauri.localhost")));
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(missing.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "http://tauri.localhost");
+        for other in [Some("https://evil.example"), Some("null"), None] {
+            let response = respond(&request("OPTIONS", "/f1/155/txt", other));
+            assert!(response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none(), "{other:?}");
         }
     }
 
