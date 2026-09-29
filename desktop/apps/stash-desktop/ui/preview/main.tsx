@@ -35,7 +35,7 @@ function Preview() {
     <div className="app-shell-root">
       <TitleBar gateway={gateway} />
       {params.get("view") === "asset"
-        ? <main className="app-main"><AssetDetailsScreen gateway={gateway} mounted asset={{ fileId: "k1", name: "Kick_G#_128.wav", sizeBytes: 4_800_000, folders: ["KSHMR Vol 5", "Kicks"] }} onBack={() => undefined} /></main>
+        ? <main className="app-main"><AssetDetailsScreen gateway={gateway} mounted asset={{ fileId: "k1", name: "Kick_G#_128.wav", sizeBytes: 4_800_000, folders: ["KSHMR Vol 5", "Kicks"] }} nav={{ canBack: true, canForward: false, onBack: () => undefined, onForward: () => undefined }} onOpenFolder={() => undefined} /></main>
         : params.get("view") === "welcome"
         ? <WelcomeScreen gateway={gateway} state={auth} dispatch={dispatch} />
         : <Shell gateway={gateway} username="Maya Chen" onSignOut={() => undefined} initialScreen={screen} initialStashOpen={params.get("stash") === "1"} initialSettingsSection={(params.get("section") ?? "General") as SettingsSection} initialSearchQuery={params.get("q") ?? ""} />}

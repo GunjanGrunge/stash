@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Breadcrumb } from "../../src/components/ui";
+import { Breadcrumb, HistoryButtons } from "../../src/components/ui";
 import { authOutcomeEvent, authReducer, firstInvalidSignInField, initialAuthState, type AuthState } from "../../src/state/authMachine";
 import { createTauriGateway, createUnavailableGateway, safeActionError } from "../../src/platform/tauri/gateway";
 import type { DesktopGateway } from "../../src/platform/contracts";
@@ -166,6 +166,13 @@ export function runWritePathUiContracts(): FoundationSummary {
 export { applyFacets, facetGroups } from "../../src/components/SearchScreen";
 export { clock, peaks } from "../../src/components/AssetDetailsScreen";
 export { previewKindOf, previewUrl } from "../../src/platform/preview";
+export { canGoBack, canGoForward, currentPlace, goBack, goForward, startHistory, visit } from "../../src/domain/history";
+export { resolveFolders } from "../../src/components/FilesScreen";
+
+/** Server-rendered Back / Forward buttons. */
+export function renderHistoryButtons(canBack: boolean, canForward: boolean): string {
+  return renderToStaticMarkup(createElement(HistoryButtons, { canBack, canForward, onBack: () => undefined, onForward: () => undefined }));
+}
 
 /** Server-rendered Figma breadcrumb, for asserting its real markup. */
 export function renderBreadcrumb(trail: { id: string; name: string }[], itemCount?: number): string {

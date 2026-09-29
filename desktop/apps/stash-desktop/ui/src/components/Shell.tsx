@@ -38,6 +38,8 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
   const [dragOver, setDragOver] = useState(false);
   const [droppedSource, setDroppedSource] = useState<SourceSummary>();
   const [searchQuery, setSearchQuery] = useState({ text: initialSearchQuery, at: 0 });
+  // A folder picked from a Search breadcrumb, for Files to open.
+  const [filesAt, setFilesAt] = useState<{ folders: string[]; at: number }>({ folders: [], at: 0 });
   const [device, setDevice] = useState<DeviceInfo>({ name: "This computer", os: "Windows", appVersion: "" });
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(initialSettingsSection);
 
@@ -120,6 +122,8 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
   const navigate = (item: NavItem) => {
     setStashOpen(false);
     if (item === "Settings") setSettingsSection("General");
+    // The sidebar's Files starts at the top of STASH, not a folder Search opened.
+    if (item === "Files") setFilesAt({ folders: [], at: Date.now() });
     setActive(item);
     setNotice(item === "Recent Stashes" ? gateway.unavailable("recent-stashes") : "");
   };
@@ -147,9 +151,9 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
       />
     );
   } else if (active === "Files") {
-    mainContent = <FilesScreen gateway={gateway} mounted={mounted} onUsage={(data) => setUsage({ status: "ready", data })} onMount={(data) => setMount({ status: "ready", data })} onStash={openStash} />;
+    mainContent = <FilesScreen key={filesAt.at} gateway={gateway} mounted={mounted} openAt={filesAt.folders} onUsage={(data) => setUsage({ status: "ready", data })} onMount={(data) => setMount({ status: "ready", data })} onStash={openStash} />;
   } else if (active === "Search") {
-    mainContent = <SearchScreen key={searchQuery.at} gateway={gateway} initialQuery={searchQuery.text} mounted={mounted} />;
+    mainContent = <SearchScreen key={searchQuery.at} gateway={gateway} initialQuery={searchQuery.text} mounted={mounted} onOpenFolder={(folders) => { setFilesAt({ folders, at: Date.now() }); setActive("Files"); }} />;
   } else if (active === "Recent Stashes") {
     mainContent = <UnavailableScreen title="Recent Stashes" message="Recent Stashes is not connected in this build yet. STASH will not invent or reuse another view for this destination." notice={notice} />;
   } else if (active === "Transfers") {

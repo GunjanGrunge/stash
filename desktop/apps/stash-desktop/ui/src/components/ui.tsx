@@ -1,6 +1,6 @@
 // Shared Figma components used across screens. Values follow the Figma
 // "stash" file; screens compose these instead of restyling each page.
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import audioWaveformIcon from "../assets/figma/common/audio-waveform.svg";
 import dotGreen from "../assets/figma/common/dot-green.svg";
 import dotGrey from "../assets/figma/common/dot-grey.svg";
@@ -183,6 +183,55 @@ export function Breadcrumb({ trail, onNavigate, itemCount }: { trail: readonly {
       </ol>
       {itemCount !== undefined && <span className="ui-breadcrumb-count">{itemCount.toLocaleString()} {itemCount === 1 ? "item" : "items"}</span>}
     </nav>
+  );
+}
+
+export type HistoryNav = { canBack: boolean; canForward: boolean; onBack: () => void; onForward: () => void };
+
+/** Explorer's Back and Forward, beside a breadcrumb. Alt+←/→ and the mouse's side buttons work too. */
+export function HistoryButtons({ canBack, canForward, onBack, onForward }: HistoryNav) {
+  // The listener is added once; it always calls the latest handlers.
+  const latest = useRef({ canBack, canForward, onBack, onForward });
+  latest.current = { canBack, canForward, onBack, onForward };
+  useEffect(() => {
+    const go = (direction: "back" | "forward") => {
+      const nav = latest.current;
+      if (direction === "back" && nav.canBack) nav.onBack();
+      if (direction === "forward" && nav.canForward) nav.onForward();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (event.key === "ArrowLeft") { event.preventDefault(); go("back"); }
+      if (event.key === "ArrowRight") { event.preventDefault(); go("forward"); }
+    };
+    // Mouse buttons 3 and 4 are the side Back / Forward buttons.
+    const onMouse = (event: MouseEvent) => {
+      if (event.button === 3) { event.preventDefault(); go("back"); }
+      if (event.button === 4) { event.preventDefault(); go("forward"); }
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mouseup", onMouse);
+    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("mouseup", onMouse); };
+  }, []);
+  return (
+    <div className="ui-history" role="group" aria-label="Navigation">
+      <button type="button" aria-label="Back" title="Back (Alt+←)" disabled={!canBack} onClick={onBack}>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
+      </button>
+      <button type="button" aria-label="Forward" title="Forward (Alt+→)" disabled={!canForward} onClick={onForward}>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
+      </button>
+    </div>
+  );
+}
+
+/** Back / Forward and the breadcrumb on one row. */
+export function LocationBar({ nav, children }: { nav: HistoryNav; children: ReactNode }) {
+  return (
+    <div className="ui-location-bar">
+      <HistoryButtons {...nav} />
+      {children}
+    </div>
   );
 }
 

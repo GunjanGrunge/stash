@@ -15,7 +15,7 @@ test("profile menu signs out and the top bar searches and controls the drive", a
   assert.match(rail, /role="menuitem" onClick=\{\(\) => \{ setMenuOpen\(false\); onSignOut\(\); \}\}>Sign out</);
   assert.match(topbar, /event\.key\.toLowerCase\(\) === "k"/);
   assert.match(topbar, /onClick=\{onToggleMount\}/);
-  assert.match(shell, /<SearchScreen key=\{searchQuery\.at\} gateway=\{gateway\} initialQuery=\{searchQuery\.text\} mounted=\{mounted\} \/>/);
+  assert.match(shell, /<SearchScreen key=\{searchQuery\.at\} gateway=\{gateway\} initialQuery=\{searchQuery\.text\} mounted=\{mounted\} onOpenFolder=\{\(folders\) => \{ setFilesAt\(\{ folders, at: Date\.now\(\) \}\); setActive\("Files"\); \}\} \/>/);
 });
 
 test("the shipped app never contains Figma sample people or old brand chrome", async () => {
