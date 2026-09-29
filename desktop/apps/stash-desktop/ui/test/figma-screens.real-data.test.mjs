@@ -45,6 +45,25 @@ test("Files stays live: STASH's change signal, focus, and a poll for other devic
   assert.match(files, /!isInFlight\(item\) && \(item\.entity === "FOLDER"/);
 });
 
+test("Asset details previews real files and shows only real details", async () => {
+  const [asset, files, conf] = await Promise.all([
+    read("../src/components/AssetDetailsScreen.tsx"),
+    read("../src/components/FilesScreen.tsx"),
+    read("../../src-tauri/tauri.conf.json"),
+  ]);
+  // Files opens it (double-click or Preview); the old animated fake player is gone.
+  assert.match(files, /canPreview\(item\) && setPreviewing\(item\)/);
+  assert.doesNotMatch(files, /isPlaying|waveform-visualizer/);
+  // Every detail comes from STASH, the name, or the media itself.
+  assert.match(asset, /gateway\.library\.describeFile\(asset\.fileId\)/);
+  assert.match(asset, /context\.decodeAudioData/);
+  assert.doesNotMatch(asset, /Pinned|Free up space|MacBook|Windows Laptop|Yesterday/);
+  // The window may load previews only from the app's own protocol.
+  const csp = JSON.parse(conf).app.security.csp;
+  for (const directive of ["media-src http://stash.localhost", "frame-src http://stash.localhost", "object-src 'none'"]) assert.ok(csp.includes(directive), directive);
+  assert.doesNotMatch(csp, /amazonaws|\*/);
+});
+
 test("Offline and the top bar use this device's real name", async () => {
   const [offline, topbar, shell] = await Promise.all([read("../src/components/OfflineScreen.tsx"), read("../src/components/TopBar.tsx"), read("../src/components/Shell.tsx")]);
   assert.match(offline, /eyebrow=\{`Pinned on \$\{deviceName\}`\}/);

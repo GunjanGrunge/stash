@@ -147,9 +147,9 @@ export function Shell({ gateway, username, onSignOut, signOutError = "", initial
       />
     );
   } else if (active === "Files") {
-    mainContent = <FilesScreen gateway={gateway} onUsage={(data) => setUsage({ status: "ready", data })} onMount={(data) => setMount({ status: "ready", data })} onStash={openStash} />;
+    mainContent = <FilesScreen gateway={gateway} mounted={mounted} onUsage={(data) => setUsage({ status: "ready", data })} onMount={(data) => setMount({ status: "ready", data })} onStash={openStash} />;
   } else if (active === "Search") {
-    mainContent = <SearchScreen key={searchQuery.at} gateway={gateway} initialQuery={searchQuery.text} />;
+    mainContent = <SearchScreen key={searchQuery.at} gateway={gateway} initialQuery={searchQuery.text} mounted={mounted} />;
   } else if (active === "Recent Stashes") {
     mainContent = <UnavailableScreen title="Recent Stashes" message="Recent Stashes is not connected in this build yet. STASH will not invent or reuse another view for this destination." notice={notice} />;
   } else if (active === "Transfers") {

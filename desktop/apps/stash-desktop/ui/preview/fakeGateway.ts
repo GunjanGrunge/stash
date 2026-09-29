@@ -51,6 +51,21 @@ const search = (query: string): SearchResponse => ({
   truncated: false,
 });
 
+/** A 2 s decaying 55 Hz tone as a WAV data URL, so the preview exercises the real player and waveform. */
+function toneWav(): string {
+  const rate = 8000, seconds = 2, samples = rate * seconds;
+  const bytes = new Uint8Array(44 + samples * 2);
+  const view = new DataView(bytes.buffer);
+  const text = (at: number, value: string) => [...value].forEach((c, i) => view.setUint8(at + i, c.charCodeAt(0)));
+  text(0, "RIFF"); view.setUint32(4, 36 + samples * 2, true); text(8, "WAVE"); text(12, "fmt ");
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true); view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true); text(36, "data"); view.setUint32(40, samples * 2, true);
+  for (let i = 0; i < samples; i += 1) view.setInt16(44 + i * 2, Math.sin((2 * Math.PI * 55 * i) / rate) * Math.exp(-i / (rate * 0.35)) * 30000, true);
+  let binary = "";
+  bytes.forEach((b) => { binary += String.fromCharCode(b); });
+  return `data:audio/wav;base64,${btoa(binary)}`;
+}
+
 export function createPreviewGateway(): DesktopGateway {
   const ok = async () => undefined;
   return {
@@ -74,6 +89,9 @@ export function createPreviewGateway(): DesktopGateway {
       unmountStash: async () => { mounted = false; return mount(); },
       onMountChanged: async () => () => undefined,
       onLibraryChanged: async () => () => undefined,
+      describeFile: async () => ({ name: "Kick_G#_128.wav", path: "KSHMR Vol 5/Kicks/Kick_G#_128.wav", sizeBytes: 4_800_000, checksum: "sha256:9e72c1a41c", kind: "audio", extension: "wav", bpm: 128, key: "G#", resolution: null, fps: null }),
+      previewUrl: (_id, name) => (name.endsWith(".wav") ? toneWav() : null),
+      openOnDrive: ok,
       search: async (query) => search(query),
       storageBreakdown: async () => ({ kinds: [
         { kind: "video", bytes: 286 * 1024 ** 3, files: 2_104 },

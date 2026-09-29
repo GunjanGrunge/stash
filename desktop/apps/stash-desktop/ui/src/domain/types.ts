@@ -109,6 +109,23 @@ export type StashSummary = {
   name: string | null;
 };
 
+/** What the Asset details card shows about one file; all read from STASH or the name. */
+export type FileDetails = {
+  name: string;
+  path?: string | null;
+  sizeBytes?: number | null;
+  checksum?: string | null;
+  kind: SearchKind;
+  extension?: string | null;
+  bpm?: number | null;
+  key?: string | null;
+  resolution?: number | null;
+  fps?: number | null;
+};
+
+/** How a file can be previewed in the app, by type. */
+export type PreviewKind = "image" | "audio" | "video" | "pdf" | "text";
+
 /** Workstation preferences the native side saves. */
 export type Preferences = {
   /** Start STASH in the tray when signing in to Windows. */

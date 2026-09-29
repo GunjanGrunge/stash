@@ -278,6 +278,11 @@ impl LeaseSource for ApiLeaseSource {
 }
 
 impl ApiLeaseSource {
+    /// Leases for one committed file; `file_id` must already be validated.
+    pub(crate) fn for_file(file_id: &str) -> Self {
+        Self { file_id: file_id.to_string() }
+    }
+
     fn fetch(&self) -> Result<String, ReadError> {
         let token = crate::auth::id_token().map_err(|_| ReadError::LeaseExpired)?;
         let response = BlockingClient::new()

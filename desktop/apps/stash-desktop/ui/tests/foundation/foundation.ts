@@ -164,6 +164,8 @@ export function runWritePathUiContracts(): FoundationSummary {
 }
 
 export { applyFacets, facetGroups } from "../../src/components/SearchScreen";
+export { clock, peaks } from "../../src/components/AssetDetailsScreen";
+export { previewKindOf, previewUrl } from "../../src/platform/preview";
 
 /** Server-rendered Figma breadcrumb, for asserting its real markup. */
 export function renderBreadcrumb(trail: { id: string; name: string }[], itemCount?: number): string {

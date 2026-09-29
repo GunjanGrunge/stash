@@ -12,6 +12,7 @@ mod device;
 mod events;
 mod mount;
 mod prefs;
+mod preview;
 mod search;
 mod startup;
 mod upload;
@@ -166,6 +167,10 @@ pub fn run() {
                 eprintln!("Couldn't show STASH: {error}");
             }
         }))
+        // Previews stream from here; each request runs off the UI thread.
+        .register_asynchronous_uri_scheme_protocol(preview::SCHEME, |_ctx, request, responder| {
+            std::thread::spawn(move || responder.respond(preview::respond(&request)));
+        })
         .manage(mount::MountController::with_uploads(uploads.clone()))
         .manage(uploads)
         .manage(search::SearchController::default())
@@ -266,7 +271,9 @@ pub fn run() {
             upload::get_transfer_status,
             upload::cancel_stash,
             prefs::get_preferences,
-            prefs::set_preferences
+            prefs::set_preferences,
+            preview::describe_file,
+            preview::open_on_drive
         ])
         .build(tauri::generate_context!())
         .expect("error while building the STASH desktop shell");
