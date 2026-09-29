@@ -64,6 +64,46 @@ test("the player shows Figma time and a waveform from real samples", () => {
   assert.deepEqual(runtime.peaks([new Float32Array(0)], 10), []);
 });
 
+test("Back and Forward move through visited places like Explorer", () => {
+  let history = runtime.startHistory("STASH");
+  assert.equal(runtime.canGoBack(history), false);
+  history = runtime.visit(history, "Samples");
+  history = runtime.visit(history, "Samples/Kick.wav details");
+  history = runtime.goBack(history);
+  assert.equal(runtime.currentPlace(history), "Samples");
+  assert.equal(runtime.canGoForward(history), true);
+  history = runtime.goForward(history);
+  assert.equal(runtime.currentPlace(history), "Samples/Kick.wav details");
+  assert.equal(runtime.goForward(history), history, "nothing ahead: forward stays put");
+  // Going somewhere new from the middle drops what was ahead, like a browser.
+  history = runtime.visit(runtime.goBack(runtime.goBack(history)), "Loops");
+  assert.deepEqual(history.entries, ["STASH", "Loops"]);
+  assert.equal(runtime.canGoForward(history), false);
+  let long = runtime.startHistory(0);
+  for (let i = 1; i <= 150; i += 1) long = runtime.visit(long, i);
+  assert.equal(long.entries.length, 100, "history is capped");
+  assert.equal(runtime.currentPlace(long), 150);
+});
+
+test("Back / Forward buttons are named and disabled when there's nowhere to go", () => {
+  const html = runtime.renderHistoryButtons(true, false);
+  assert.match(html, /<div class="ui-history" role="group" aria-label="Navigation">/);
+  assert.match(html, /<button type="button" aria-label="Back" title="Back \(Alt\+←\)">/);
+  assert.match(html, /<button type="button" aria-label="Forward" title="Forward \(Alt\+→\)" disabled="">/);
+});
+
+test("a Search breadcrumb finds folders by name, stopping at the deepest one found", async () => {
+  const tree = {
+    ROOT: [{ entity: "FOLDER", folderId: "f1", name: "Sample Libraries" }, { entity: "FILE", fileId: "x", name: "KSHMR Vol 5" }],
+    f1: [{ entity: "FOLDER", folderId: "f2", name: "KSHMR Vol 5" }],
+    f2: [],
+  };
+  const listChildren = async (id) => ({ items: tree[id] });
+  assert.deepEqual(await runtime.resolveFolders(listChildren, ["sample libraries", "KSHMR Vol 5"]), [{ id: "f1", name: "Sample Libraries" }, { id: "f2", name: "KSHMR Vol 5" }]);
+  assert.deepEqual(await runtime.resolveFolders(listChildren, ["Sample Libraries", "Gone", "KSHMR Vol 5"]), [{ id: "f1", name: "Sample Libraries" }]);
+  assert.deepEqual(await runtime.resolveFolders(listChildren, []), []);
+});
+
 test("gateway property harness uses only fake invoke and never a browser/backend transport", async () => {
   const result = await runtime.runGatewayProperties();
   assert.equal(result.seeds[0], 0x1a2b3c4d);

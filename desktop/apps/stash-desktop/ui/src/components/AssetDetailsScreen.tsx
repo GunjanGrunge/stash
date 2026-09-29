@@ -5,7 +5,7 @@ import { extensionOf, previewKindOf } from "../platform/preview";
 import { safeActionError } from "../platform/tauri/gateway";
 import { formatBytes } from "./FilesScreen";
 import { resolutionLabel } from "./SearchScreen";
-import { EmptyRow, Screen } from "./ui";
+import { Breadcrumb, EmptyRow, LocationBar, Screen, type HistoryNav } from "./ui";
 
 /** The file being looked at, as the screen that opened it knows it. */
 export type AssetRef = {
@@ -16,7 +16,15 @@ export type AssetRef = {
   folders: string[];
 };
 
-type Props = { gateway: DesktopGateway; asset: AssetRef; mounted: boolean; onBack: () => void };
+type Props = {
+  gateway: DesktopGateway;
+  asset: AssetRef;
+  mounted: boolean;
+  /** Back / Forward of the screen that opened this page. */
+  nav: HistoryNav;
+  /** Opens one of the file's folders: 0 is the top of STASH, 1 its first folder, and so on. */
+  onOpenFolder: (depth: number) => void;
+};
 
 /** Audio up to this size gets a waveform drawn from its real samples. */
 const WAVEFORM_MAX_BYTES = 25 * 1024 * 1024;
@@ -50,13 +58,8 @@ export function peaks(channels: Float32Array[], bars: number): number[] {
   return result.map((value) => value / loudest);
 }
 
-function shortChecksum(checksum: string): string {
-  const hex = checksum.replace(/^sha256:/, "");
-  return hex.length > 12 ? `${hex.slice(0, 4)}…${hex.slice(-4)}` : hex;
-}
-
 /** Figma "Asset details" (Kick_G#_128.wav frame), with real data only. */
-export function AssetDetailsScreen({ gateway, asset, mounted, onBack }: Props) {
+export function AssetDetailsScreen({ gateway, asset, mounted, nav, onOpenFolder }: Props) {
   const [details, setDetails] = useState<FileDetails | null>(null);
   const [detailsError, setDetailsError] = useState("");
   const [duration, setDuration] = useState<number | null>(null);
@@ -85,15 +88,14 @@ export function AssetDetailsScreen({ gateway, asset, mounted, onBack }: Props) {
   if (details?.fps) rows.push(["Frame rate", `${details.fps} fps`]);
   if (duration !== null) rows.push(["Duration", clock(duration)]);
   rows.push(["Size", formatBytes(details?.sizeBytes ?? asset.sizeBytes)]);
-  if (details?.checksum) rows.push(["Checksum", shortChecksum(details.checksum)]);
+  // Each folder is a link, like Files; the file itself is where you are.
+  const trail = [...asset.folders.map((name, index) => ({ id: `folder-${index}`, name })), { id: asset.fileId, name: asset.name }];
 
   return (
     <Screen label={`${asset.name} details`}>
-      <nav className="asset-crumbs" aria-label="File location">
-        <button type="button" onClick={onBack}>{["STASH", ...asset.folders].join(" / ")}</button>
-        <span aria-hidden="true">›</span>
-        <span aria-current="page">{asset.name}</span>
-      </nav>
+      <LocationBar nav={nav}>
+        <Breadcrumb trail={trail} onNavigate={(index) => onOpenFolder(index + 1)} />
+      </LocationBar>
       <div className="asset-layout">
         <div className="asset-main">
           <div className={`asset-preview is-${kind ?? "none"}`}>

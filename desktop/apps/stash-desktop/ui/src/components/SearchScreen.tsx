@@ -1,15 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import sparklesIcon from "../assets/figma/common/sparkles.svg";
 import searchIcon from "../assets/figma/shell/search.svg";
+import { canGoBack, canGoForward, currentPlace, goBack, goForward, startHistory, visit, type History } from "../domain/history";
 import type { SearchHit, SearchResponse } from "../domain/types";
 import type { DesktopGateway } from "../platform/contracts";
 import { safeActionError } from "../platform/tauri/gateway";
 import { formatBytes } from "./FilesScreen";
 import { AssetDetailsScreen } from "./AssetDetailsScreen";
 import { MaskIcon } from "./NavigationRail";
-import { AssetRow, EmptyRow, InfoBar, Screen } from "./ui";
+import { AssetRow, EmptyRow, InfoBar, LocationBar, Screen, type HistoryNav } from "./ui";
 
-type Props = { gateway: DesktopGateway; initialQuery?: string; mounted?: boolean };
+type Props = {
+  gateway: DesktopGateway;
+  initialQuery?: string;
+  mounted?: boolean;
+  /** Opens a folder in Files, by folder names from the top of STASH. */
+  onOpenFolder?: (folders: string[]) => void;
+};
 
 type SearchState =
   | { status: "idle" }
@@ -77,11 +84,20 @@ export function applyFacets(hits: SearchHit[], chosen: Partial<Record<FacetId, s
   return hits.filter((hit) => FACETS.every(({ id, value }) => !chosen[id] || value(hit) === chosen[id]));
 }
 
-export function SearchScreen({ gateway, initialQuery = "", mounted = false }: Props) {
+export function SearchScreen({ gateway, initialQuery = "", mounted = false, onOpenFolder }: Props) {
   const [query, setQuery] = useState(initialQuery);
   const [state, setState] = useState<SearchState>({ status: "idle" });
   const [chosen, setChosen] = useState<Partial<Record<FacetId, string>>>({});
-  const [previewing, setPreviewing] = useState<SearchHit | null>(null);
+  // The results are the first place; each file opened from them is another.
+  const [history, setHistory] = useState<History<SearchHit | null>>(() => startHistory(null));
+  const previewing = currentPlace(history);
+  const setPreviewing = (hit: SearchHit) => setHistory((current) => visit(current, hit));
+  const nav: HistoryNav = {
+    canBack: canGoBack(history),
+    canForward: canGoForward(history),
+    onBack: () => setHistory(goBack),
+    onForward: () => setHistory(goForward),
+  };
   const request = useRef(0);
   const input = useRef<HTMLInputElement>(null);
 
@@ -114,11 +130,10 @@ export function SearchScreen({ gateway, initialQuery = "", mounted = false }: Pr
 
   if (previewing) {
     const folders = previewing.path.split(/[\\/]/).filter(Boolean).slice(0, -1);
-    return <AssetDetailsScreen gateway={gateway} asset={{ fileId: previewing.fileId, name: previewing.name, sizeBytes: previewing.sizeBytes, folders }} mounted={mounted} onBack={() => setPreviewing(null)} />;
+    return <AssetDetailsScreen gateway={gateway} asset={{ fileId: previewing.fileId, name: previewing.name, sizeBytes: previewing.sizeBytes, folders }} mounted={mounted} nav={nav} onOpenFolder={(depth) => onOpenFolder?.(folders.slice(0, depth))} />;
   }
 
-  return (
-    <Screen label="Search">
+  const searchBar = (
       <form className="search-bar" role="search" onSubmit={(e) => { e.preventDefault(); run(query); }}>
         <span className="search-bar-icon"><MaskIcon src={searchIcon} size={20} /></span>
         <label htmlFor="search-input" className="visually-hidden">Search your STASH</label>
@@ -136,6 +151,12 @@ export function SearchScreen({ gateway, initialQuery = "", mounted = false }: Pr
         />
         <kbd className="search-esc">ESC</kbd>
       </form>
+  );
+
+  return (
+    <Screen label="Search">
+      {/* Back / Forward appear once a file has been opened from the results. */}
+      {nav.canBack || nav.canForward ? <LocationBar nav={nav}>{searchBar}</LocationBar> : searchBar}
 
       {state.status === "idle" && (
         <div className="search-examples" aria-label="Example searches">

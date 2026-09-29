@@ -1,9 +1,25 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { CapabilityState, ChildItem, FolderLocation, MountStatus, SortDirection, SortKey, Usage } from "../domain/types";
+import { canGoBack, canGoForward, currentPlace, goBack, goForward, startHistory, visit, type History } from "../domain/history";
 import type { DesktopGateway } from "../platform/contracts";
 import { safeActionError } from "../platform/tauri/gateway";
 import { AssetDetailsScreen } from "./AssetDetailsScreen";
-import { Breadcrumb, StateTag } from "./ui";
+import { Breadcrumb, LocationBar, StateTag, type HistoryNav } from "./ui";
+
+/** Where Files is: a folder, and the file open in Asset details (if any). */
+type FilesPlace = { path: FolderLocation[]; preview: ChildItem | null };
+
+/** Finds folders by name from the top of STASH (Search knows paths, not ids). Stops at the deepest one found. */
+export async function resolveFolders(listChildren: DesktopGateway["library"]["listChildren"], names: readonly string[]): Promise<FolderLocation[]> {
+  const path: FolderLocation[] = [];
+  for (const name of names) {
+    const result = await listChildren(path.at(-1)?.id ?? "ROOT");
+    const folder = (result.items ?? []).find((item) => item.entity === "FOLDER" && item.folderId && item.name.toLowerCase() === name.toLowerCase());
+    if (!folder?.folderId) break;
+    path.push({ id: folder.folderId, name: folder.name });
+  }
+  return path;
+}
 
 export function formatBytes(value?: number | null): string {
   if (value == null || !Number.isFinite(value)) return "—";
@@ -40,15 +56,22 @@ const iconFor = (item: ChildItem): string =>
   : item.name.endsWith(".mp4") || item.name.endsWith(".mov") ? "📹"
   : "📄";
 
-export function FilesScreen({ gateway, mounted, onUsage, onMount, onStash }: { gateway: DesktopGateway; mounted: boolean; onUsage: (usage: Usage) => void; onMount: (status: MountStatus) => void; onStash: () => void }) {
-  const [folderId, setFolderId] = useState("ROOT");
-  const [path, setPath] = useState<FolderLocation[]>([]);
+export function FilesScreen({ gateway, mounted, onUsage, onMount, onStash, openAt }: { gateway: DesktopGateway; mounted: boolean; onUsage: (usage: Usage) => void; onMount: (status: MountStatus) => void; onStash: () => void; /** Folder names to open first, e.g. from a Search breadcrumb. */ openAt?: readonly string[] }) {
+  const [history, setHistory] = useState<History<FilesPlace>>(() => startHistory({ path: [], preview: null }));
+  const { path, preview: previewing } = currentPlace(history);
+  const folderId = path.at(-1)?.id ?? "ROOT";
+  const go = (place: FilesPlace) => setHistory((current) => visit(current, place));
+  const nav: HistoryNav = {
+    canBack: canGoBack(history),
+    canForward: canGoForward(history),
+    onBack: () => setHistory(goBack),
+    onForward: () => setHistory(goForward),
+  };
   const [filesState, setFilesState] = useState<CapabilityState<ChildItem[]>>({ status: "loading" });
   const [selected, setSelected] = useState<ChildItem | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedType, setSelectedType] = useState<string>("All");
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({ key: "name", direction: "ascending" });
-  const [previewing, setPreviewing] = useState<ChildItem | null>(null);
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
@@ -74,6 +97,16 @@ export function FilesScreen({ gateway, mounted, onUsage, onMount, onStash }: { g
   useEffect(() => {
     loadChildren();
   }, [folderId, gateway]);
+
+  // Opened from a Search breadcrumb: go straight to that folder.
+  useEffect(() => {
+    if (!openAt?.length) return;
+    let active = true;
+    void resolveFolders(gateway.library.listChildren, openAt).then((found) => {
+      if (active && found.length) setHistory(startHistory({ path: found, preview: null }));
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [gateway, openAt]);
 
   // The folder stays live like Explorer: it refreshes the moment STASH says
   // something changed (a delete or copy on S:, an upload landing, an action
@@ -173,14 +206,13 @@ export function FilesScreen({ gateway, mounted, onUsage, onMount, onStash }: { g
   const openFolder = (item: ChildItem) => {
     const id = item.folderId;
     if (kindOf(item) !== "Folder" || !id) return;
-    setFolderId(id);
-    setPath((current) => [...current, { id, name: item.name }]);
+    go({ path: [...path, { id, name: item.name }], preview: null });
   };
 
-  const goTo = (location: FolderLocation | null, index: number) => {
-    setFolderId(location?.id ?? "ROOT");
-    setPath(index < 0 ? [] : path.slice(0, index + 1));
-  };
+  /** A breadcrumb link: -1 is the top of STASH. */
+  const goTo = (index: number) => go({ path: index < 0 ? [] : path.slice(0, index + 1), preview: null });
+
+  const setPreviewing = (item: ChildItem) => go({ path, preview: item });
 
   const selectItem = (item: ChildItem) => {
     setSelected(item);
@@ -203,7 +235,7 @@ export function FilesScreen({ gateway, mounted, onUsage, onMount, onStash }: { g
 
   if (previewing?.fileId) {
     const asset = { fileId: previewing.fileId, name: previewing.name, sizeBytes: previewing.sizeBytes ?? 0, folders: path.map((location) => location.name) };
-    return <AssetDetailsScreen gateway={gateway} asset={asset} mounted={mounted} onBack={() => setPreviewing(null)} />;
+    return <AssetDetailsScreen gateway={gateway} asset={asset} mounted={mounted} nav={nav} onOpenFolder={(depth) => goTo(depth - 1)} />;
   }
 
   return (
@@ -232,11 +264,13 @@ export function FilesScreen({ gateway, mounted, onUsage, onMount, onStash }: { g
         </div>
       </header>
 
-      <Breadcrumb
-        trail={path}
-        onNavigate={(index) => goTo(index < 0 ? null : path[index] ?? null, index)}
-        itemCount={filesState.status === "ready" || filesState.status === "stale" ? items.length : undefined}
-      />
+      <LocationBar nav={nav}>
+        <Breadcrumb
+          trail={path}
+          onNavigate={goTo}
+          itemCount={filesState.status === "ready" || filesState.status === "stale" ? items.length : undefined}
+        />
+      </LocationBar>
 
       {folderError && !showNewFolderModal && <div className="status-banner banner-warning" role="alert">{folderError}</div>}
 

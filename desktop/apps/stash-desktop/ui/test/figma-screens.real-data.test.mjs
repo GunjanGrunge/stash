@@ -58,6 +58,12 @@ test("Asset details previews real files and shows only real details", async () =
   assert.match(asset, /gateway\.library\.describeFile\(asset\.fileId\)/);
   assert.match(asset, /context\.decodeAudioData/);
   assert.doesNotMatch(asset, /Pinned|Free up space|MacBook|Windows Laptop|Yesterday/);
+  // The checksum is STASH's own business, not the user's.
+  assert.doesNotMatch(asset, /Checksum|checksum/);
+  // Each folder is a link, with Back / Forward beside it, from Files and from Search.
+  assert.match(asset, /<LocationBar nav=\{nav\}>\s*<Breadcrumb trail=\{trail\} onNavigate=\{\(index\) => onOpenFolder\(index \+ 1\)\} \/>/);
+  assert.match(files, /<LocationBar nav=\{nav\}>/);
+  assert.match(files, /onOpenFolder=\{\(depth\) => goTo\(depth - 1\)\}/);
   // The window may load previews only from the app's own protocol.
   const csp = JSON.parse(conf).app.security.csp;
   for (const directive of ["media-src http://stash.localhost", "frame-src http://stash.localhost", "object-src 'none'"]) assert.ok(csp.includes(directive), directive);

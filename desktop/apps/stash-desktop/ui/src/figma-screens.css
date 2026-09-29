@@ -67,6 +67,13 @@
 .ui-breadcrumb .ui-breadcrumb-root { display: flex; flex: none; align-items: center; gap: 8px; }
 .ui-breadcrumb .ui-breadcrumb-root img { flex: none; }
 .ui-breadcrumb-count { flex: none; color: var(--text-faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ui-location-bar { display: flex; align-items: stretch; gap: 8px; min-width: 0; }
+.ui-location-bar > .ui-breadcrumb, .ui-location-bar > .search-bar { flex: 1; min-width: 0; }
+.ui-history { display: flex; flex: none; gap: 4px; }
+.ui-history button { display: grid; place-items: center; width: 36px; min-height: 42px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-card); color: var(--text); cursor: pointer; }
+.ui-history button:hover:not(:disabled) { border-color: var(--border-strong); }
+.ui-history button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ui-history button:disabled { color: var(--text-faint); cursor: default; }
 .ui-toggle { position: relative; width: 38px; height: 22px; flex: none; padding: 0; border: 0; border-radius: 999px; background: var(--border-strong); cursor: pointer; }
 .ui-toggle > span { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--muted); transition: transform 0.15s ease; }
 .ui-toggle.is-on { background: var(--accent); }
@@ -214,10 +221,6 @@
 }
 
 /* Figma "Asset details": preview card and player, title, Details card. */
-.asset-crumbs { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--muted); font: 400 11px/1.3 Inter, system-ui, sans-serif; }
-.asset-crumbs button { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.asset-crumbs button:hover { color: var(--text); }
-.asset-crumbs [aria-current="page"] { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .asset-layout { display: grid; grid-template-columns: minmax(0, 1fr) 328px; gap: 22px; align-items: start; }
 .asset-main { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .asset-preview { position: relative; display: flex; flex-direction: column; justify-content: center; gap: 20px; min-height: 358px; padding: 28px; border: 1px solid var(--border); border-radius: 24px; background: var(--surface-card); overflow: hidden; }
