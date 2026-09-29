@@ -8,6 +8,7 @@ import dotLime from "../assets/figma/common/dot-lime.svg";
 import dotViolet from "../assets/figma/common/dot-violet.svg";
 import fileIcon from "../assets/figma/common/file.svg";
 import filmIcon from "../assets/figma/common/film.svg";
+import hardDriveIcon from "../assets/figma/common/hard-drive.svg";
 import imageIcon from "../assets/figma/common/image.svg";
 import type { SearchKind } from "../domain/types";
 
@@ -150,6 +151,38 @@ export function InfoBar({ icon, children, action }: { icon: string; children: Re
       <p>{children}</p>
       {action}
     </div>
+  );
+}
+
+/**
+ * Figma "Filesystem browser" breadcrumb: STASH root, each parent folder as a
+ * link back, the open folder as the current page, and its item count.
+ * `onNavigate(-1)` returns to the root; `onNavigate(i)` to `trail[i]`.
+ */
+export function Breadcrumb({ trail, onNavigate, itemCount }: { trail: readonly { id: string; name: string }[]; onNavigate: (index: number) => void; itemCount?: number }) {
+  const last = trail.length - 1;
+  return (
+    <nav className="ui-breadcrumb" aria-label="Folder path">
+      <ol>
+        <li>
+          {last < 0 ? (
+            <span className="ui-breadcrumb-root" aria-current="page"><img src={hardDriveIcon} width={16} height={16} alt="" />STASH</span>
+          ) : (
+            <button type="button" className="ui-breadcrumb-root" onClick={() => onNavigate(-1)}><img src={hardDriveIcon} width={16} height={16} alt="" />STASH</button>
+          )}
+        </li>
+        {trail.map((crumb, index) => (
+          <li key={`${crumb.id}-${index}`}>
+            {index === last ? (
+              <span aria-current="page" title={crumb.name}>{crumb.name}</span>
+            ) : (
+              <button type="button" title={crumb.name} onClick={() => onNavigate(index)}>{crumb.name}</button>
+            )}
+          </li>
+        ))}
+      </ol>
+      {itemCount !== undefined && <span className="ui-breadcrumb-count">{itemCount.toLocaleString()} {itemCount === 1 ? "item" : "items"}</span>}
+    </nav>
   );
 }
 

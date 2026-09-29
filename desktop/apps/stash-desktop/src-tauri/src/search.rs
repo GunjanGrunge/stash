@@ -11,7 +11,7 @@ use std::{
 
 use serde::Serialize;
 use serde_json::Value;
-use stash_core::search::{FileMetadata, MediaKind, MusicalKey, SearchDoc, SearchIndex};
+use stash_core::search::{parse_query, FileMetadata, MediaKind, MusicalKey, ParsedQuery, SearchDoc, SearchIndex};
 
 /// A rebuilt index is reused for this long before the next query refreshes it.
 const INDEX_TTL: Duration = Duration::from_secs(120);
@@ -148,12 +148,38 @@ pub struct SearchResponse {
     pub hits: Vec<SearchHitView>,
     pub total: usize,
     pub unsupported: Vec<String>,
+    /// How the query was read, e.g. "Name: kick", "Key: G#", "Tempo: 120–130 BPM".
+    pub understood: Vec<String>,
     pub indexed_files: usize,
     pub truncated: bool,
 }
 
 fn view(meta: &FileMetadata) -> (&'static str, Option<String>) {
     (kind_label(meta.kind), meta.key.map(key_label))
+}
+
+/// Plain labels for what the search engine took from the query.
+pub(crate) fn understood_labels(query: &ParsedQuery) -> Vec<String> {
+    let mut labels: Vec<String> = query.terms.iter().map(|term| format!("Name: {term}")).collect();
+    if let Some(key) = query.key {
+        labels.push(format!("Key: {}", key_label(key)));
+    }
+    match query.bpm {
+        Some((low, high)) if low == high => labels.push(format!("Tempo: {low} BPM")),
+        Some((low, high)) => labels.push(format!("Tempo: {low}–{high} BPM")),
+        None => {}
+    }
+    if let Some(resolution) = query.resolution {
+        labels.push(match resolution {
+            4320 => "Resolution: 8K".to_string(),
+            2160 => "Resolution: 4K".to_string(),
+            other => format!("Resolution: {other}p"),
+        });
+    }
+    if let Some(fps) = query.fps {
+        labels.push(format!("Frame rate: {fps} fps"));
+    }
+    labels
 }
 
 pub(crate) fn run_query(index: &SearchIndex, query: &str, truncated: bool) -> SearchResponse {
@@ -180,6 +206,7 @@ pub(crate) fn run_query(index: &SearchIndex, query: &str, truncated: bool) -> Se
             .collect(),
         total: results.total,
         unsupported: results.unsupported,
+        understood: understood_labels(&parse_query(query)),
         indexed_files: index.len(),
         truncated,
     }
@@ -316,6 +343,15 @@ mod tests {
         assert_eq!(r.hits[0].key.as_deref(), Some("G#"));
         assert_eq!(r.hits[0].bpm, Some(128));
         assert_eq!(r.hits[0].kind, "audio");
+        assert_eq!(r.understood, ["Name: kick", "Tempo: 128 BPM"]);
+    }
+
+    #[test]
+    fn the_response_says_how_the_query_was_read() {
+        let labels = |query: &str| understood_labels(&parse_query(query));
+        assert_eq!(labels("kick G# 120-130 bpm"), ["Name: kick", "Key: G#", "Tempo: 120–130 BPM"]);
+        assert_eq!(labels("4k footage 60fps"), ["Name: footage", "Resolution: 4K", "Frame rate: 60 fps"]);
+        assert!(labels("").is_empty());
     }
 
     #[test]

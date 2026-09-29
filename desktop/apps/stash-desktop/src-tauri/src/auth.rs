@@ -28,6 +28,7 @@ use aws_sdk_cognitoidentityprovider::types::{AuthFlowType, ChallengeNameType};
 use aws_sdk_cognitoidentityprovider::Client;
 use serde::Serialize;
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 const REGION: &str = "ap-south-1";
 const USER_POOL_ID: &str = "ap-south-1_0ELYEOOy0";
@@ -35,25 +36,62 @@ const CLIENT_ID: &str = "6ovr480b8f4lhuvdvvonsk8atp";
 const REFRESH_TOKEN_SERVICE: &str = "com.stash.desktop";
 const REFRESH_TOKEN_ACCOUNT: &str = "cognito-refresh-token";
 
-/// Short-lived access material is process-local only. It is deliberately not
-/// part of `AuthOutcome`, so Tauri never serializes it into the webview.
-static ID_TOKEN: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+/// Cognito ID tokens live for one hour (the pool keeps the default). A webview
+/// reload inside this window reuses the token; after it, the session is renewed
+/// from the refresh token instead of sending the creator back to sign-in.
+const ID_TOKEN_REUSE_WINDOW: Duration = Duration::from_secs(50 * 60);
 
-pub(crate) fn id_token() -> Result<String, String> {
-    ID_TOKEN
+/// The signed-in session, process-local only. Nothing here is part of
+/// `AuthOutcome`, so Tauri never serializes it into the webview. The refresh
+/// token is kept in memory for every sign-in, so reloading the window does not
+/// sign the creator out; it reaches Credential Manager only when they opted in.
+struct Session {
+    id_token: String,
+    obtained_at: Instant,
+    refresh_token: Option<String>,
+    remembered: bool,
+}
+
+static SESSION: OnceLock<Mutex<Option<Session>>> = OnceLock::new();
+
+fn session() -> Result<std::sync::MutexGuard<'static, Option<Session>>, String> {
+    SESSION
         .get_or_init(|| Mutex::new(None))
         .lock()
-        .map_err(|_| "Sign-in session is unavailable.".to_string())?
-        .clone()
+        .map_err(|_| "Sign-in session is unavailable.".to_string())
+}
+
+pub(crate) fn id_token() -> Result<String, String> {
+    session()?
+        .as_ref()
+        .map(|current| current.id_token.clone())
         .ok_or_else(|| "Please sign in again to access your STASH.".to_string())
 }
 
-fn retain_id_token(token: Option<&str>) -> Result<(), String> {
-    let token = validated_id_token(token)?;
-    *ID_TOKEN
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .map_err(|_| "Sign-in session is unavailable.".to_string())? = Some(token.to_owned());
+fn is_fresh(obtained_at: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(obtained_at) < ID_TOKEN_REUSE_WINDOW
+}
+
+/// Replaces the in-memory session. A missing replacement refresh token keeps
+/// the previous one: Cognito rotation normally supplies one, but omitting it
+/// must not throw away a still-valid session.
+fn retain_session(
+    id_token: Option<&str>,
+    refresh_token: Option<&str>,
+    remembered: bool,
+) -> Result<(), String> {
+    let id_token = validated_id_token(id_token)?.to_owned();
+    let mut current = session()?;
+    let refresh_token = refresh_token
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+        .or_else(|| current.as_mut().and_then(|previous| previous.refresh_token.take()));
+    *current = Some(Session {
+        id_token,
+        obtained_at: Instant::now(),
+        refresh_token,
+        remembered,
+    });
     Ok(())
 }
 
@@ -185,19 +223,22 @@ fn retain_initial_session(
         remember,
         &CredentialManagerStore,
     )?;
-    retain_id_token(Some(&id_token))
+    retain_session(Some(&id_token), result.refresh_token(), remember)
 }
 
 fn retain_restored_session(
     result: &aws_sdk_cognitoidentityprovider::types::AuthenticationResultType,
+    remembered: bool,
 ) -> Result<(), String> {
-    retain_id_token(result.id_token())?;
+    retain_session(result.id_token(), result.refresh_token(), remembered)?;
     // Rotation normally supplies a replacement refresh token. If a provider
     // ever omits it, retain the existing Credential Manager entry instead of
-    // throwing away a still-valid remembered session.
-    if result
-        .refresh_token()
-        .is_some_and(|token| !token.is_empty())
+    // throwing away a still-valid remembered session. A session the creator
+    // did not ask to remember is never written to Credential Manager.
+    if remembered
+        && result
+            .refresh_token()
+            .is_some_and(|token| !token.is_empty())
     {
         CredentialManagerStore
             .store(required_refresh_token(result.refresh_token())?.as_bytes())
@@ -340,7 +381,21 @@ pub async fn complete_new_password(
 #[tauri::command]
 pub async fn restore_session() -> Result<RestoreOutcome, String> {
     let store = CredentialManagerStore;
-    let Some(refresh_token) = restore_refresh_token(&store) else {
+    // A window reload keeps the process, and with it the session: reuse it
+    // rather than asking the creator to sign in again.
+    let in_memory = {
+        let current = session()?;
+        match current.as_ref() {
+            Some(live) if is_fresh(live.obtained_at, Instant::now()) => {
+                return Ok(RestoreOutcome::SignedIn)
+            }
+            Some(live) => live.refresh_token.clone().map(|token| (token, live.remembered)),
+            None => None,
+        }
+    };
+    let Some((refresh_token, remembered)) =
+        in_memory.or_else(|| restore_refresh_token(&store).map(|token| (token, true)))
+    else {
         return Ok(RestoreOutcome::SignedOut);
     };
     let response = cognito_client()
@@ -350,25 +405,24 @@ pub async fn restore_session() -> Result<RestoreOutcome, String> {
         .refresh_token(refresh_token)
         .send()
         .await;
-    let Ok(response) = response else {
-        let _ = store.clear();
+    let result = response
+        .ok()
+        .and_then(|response| response.authentication_result().cloned());
+    let Some(result) = result else {
+        *session()? = None;
+        if remembered {
+            let _ = store.clear();
+        }
         return Ok(RestoreOutcome::SignedOut);
     };
-    let Some(result) = response.authentication_result() else {
-        let _ = store.clear();
-        return Ok(RestoreOutcome::SignedOut);
-    };
-    retain_restored_session(result)?;
+    retain_restored_session(&result, remembered)?;
     Ok(RestoreOutcome::SignedIn)
 }
 
 #[tauri::command]
 pub fn sign_out(search: tauri::State<'_, crate::search::SearchController>) -> Result<(), String> {
     search.clear();
-    *ID_TOKEN
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .map_err(|_| "Sign-in session is unavailable.".to_string())? = None;
+    *session()? = None;
     CredentialManagerStore
         .clear()
         .map_err(|_| "STASH couldn't remove the remembered sign-in from this device.".to_string())
@@ -511,5 +565,31 @@ mod tests {
         let unreadable = fake_store(Err(()));
         assert_eq!(restore_refresh_token(&unreadable), None);
         assert_eq!(unreadable.clears.get(), 1);
+    }
+
+    #[test]
+    fn a_reload_within_the_token_lifetime_reuses_the_session() {
+        let signed_in = Instant::now();
+        assert!(is_fresh(signed_in, signed_in + Duration::from_secs(10 * 60)));
+        assert!(!is_fresh(signed_in, signed_in + Duration::from_secs(55 * 60)));
+        // A clock that appears to run backwards must not panic.
+        assert!(is_fresh(signed_in + Duration::from_secs(5), signed_in));
+    }
+
+    #[test]
+    fn the_in_memory_session_keeps_its_refresh_token_across_renewal() {
+        retain_session(Some("id-1"), Some("refresh-1"), false).unwrap();
+        // Cognito may omit a rotated refresh token; the previous one survives.
+        retain_session(Some("id-2"), None, false).unwrap();
+        {
+            let current = session().unwrap();
+            let live = current.as_ref().unwrap();
+            assert_eq!(live.id_token, "id-2");
+            assert_eq!(live.refresh_token.as_deref(), Some("refresh-1"));
+            assert!(!live.remembered);
+        }
+        assert_eq!(id_token().unwrap(), "id-2");
+        *session().unwrap() = None;
+        assert!(id_token().is_err());
     }
 }

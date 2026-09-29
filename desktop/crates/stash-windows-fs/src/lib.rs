@@ -9,8 +9,11 @@
 //! and re-listed after a short freshness window, so files Stashed from the
 //! app (or another device) appear on the drive without remounting. If a
 //! refresh fails, the last good listing keeps serving (PRD §9: communicate
-//! network state rather than going blank). New root-level files may be
-//! written; folders, rename and delete are not supported yet.
+//! network state rather than going blank). New files and folders may be
+//! created at any depth: a folder is created in STASH at once, a file is
+//! handed to the [`WriteSink`] when closed and stays visible from its local
+//! spool until STASH lists it. Delete moves items to STASH Trash. Editing a
+//! committed file and rename are not supported yet.
 //!
 //! ## Why the logic is split from the trait impl
 //! `winfsp::filesystem::FileSystemContext::open` and `::read_directory` take
@@ -27,17 +30,17 @@ use stash_core::{Cache, RangeProvider, ReadError};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::fs::{File, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{
     STATUS_ACCESS_DENIED, STATUS_INVALID_DEVICE_REQUEST, STATUS_IO_DEVICE_ERROR,
     STATUS_MEDIA_WRITE_PROTECTED, STATUS_NETWORK_UNREACHABLE, STATUS_OBJECT_NAME_COLLISION,
-    STATUS_OBJECT_NAME_NOT_FOUND,
+    STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND,
 };
 use windows::Win32::Storage::FileSystem::{
-    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_READONLY,
+    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
 };
 use winfsp::filesystem::{
     DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, OpenFileInfo, VolumeInfo,
@@ -75,6 +78,23 @@ pub trait Library: Send + Sync {
     fn used_bytes(&self) -> Option<u64> {
         None
     }
+    /// Moves a file or folder (and everything under it) to STASH Trash.
+    /// Recoverable; nothing is destroyed. Default: not supported.
+    fn trash(&self, _target: TrashTarget<'_>) -> Result<(), ReadError> {
+        Err(ReadError::Io)
+    }
+    /// Creates an empty folder under `parent` (`None` is the top level) and
+    /// returns its id. Default: not supported.
+    fn create_folder(&self, _parent: Option<&str>, _name: &str) -> Result<String, ReadError> {
+        Err(ReadError::Io)
+    }
+}
+
+/// What a delete on the drive sends to STASH Trash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrashTarget<'a> {
+    File(&'a str),
+    Folder(&'a str),
 }
 
 /// Tunables for a mounted drive.
@@ -103,6 +123,7 @@ impl Default for DriveOptions {
 /// repeated opens (Explorer thumbnails, a DAW re-reading headers) reuse the
 /// same verified segment cache.
 pub struct OpenFile<P: RangeProvider> {
+    id: String,
     size: u64,
     cache: Cache,
     provider: P,
@@ -115,14 +136,30 @@ const OPEN_FILE_KEEP: usize = 64;
 /// A native sink receives a completed spool. The filesystem crate does not
 /// know about Tauri, HTTP, credentials, or the STASH API.
 pub trait WriteSink: Send + Sync {
-    fn begin(&self, name: &[u16]) -> Result<WriteSpool, String>;
+    /// Starts a new file named `name` in folder `parent` (`None` is the top level).
+    fn begin(&self, parent: Option<&str>, name: &[u16]) -> Result<WriteSpool, String>;
     fn submit(&self, spool: WriteSpool) -> Result<(), String>;
+    /// Files in `parent` handed over by `submit` that STASH may not list yet.
+    /// The drive shows them (readable from their local copy) meanwhile.
+    fn queued_in(&self, _parent: Option<&str>) -> Vec<QueuedUpload> {
+        Vec::new()
+    }
+}
+
+/// A closed file waiting for, or in the middle of, its upload.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueuedUpload {
+    pub name: Vec<u16>,
+    pub size: u64,
+    /// The local copy the upload reads from.
+    pub path: PathBuf,
 }
 
 /// A bounded, file-backed write session. The file is always created below the
 /// OS temp directory and is removed on drop unless ownership is detached by a
 /// sink that has safely scheduled its upload.
 pub struct WriteSpool {
+    parent: Option<String>,
     name: Vec<u16>,
     path: PathBuf,
     file: Option<File>,
@@ -130,7 +167,7 @@ pub struct WriteSpool {
 }
 
 impl WriteSpool {
-    pub fn create_for_mount(name: &[u16]) -> Result<Self, String> {
+    pub fn create_for_mount(parent: Option<&str>, name: &[u16]) -> Result<Self, String> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let directory = std::env::temp_dir().join("stash-mount-spool");
         std::fs::create_dir_all(&directory)
@@ -147,6 +184,7 @@ impl WriteSpool {
             .open(&path)
             .map_err(|_| "STASH could not create its temporary write spool.".to_string())?;
         Ok(Self {
+            parent: parent.map(str::to_string),
             name: name.to_vec(),
             path,
             file: Some(file),
@@ -154,6 +192,10 @@ impl WriteSpool {
         })
     }
 
+    /// The STASH folder this file lands in; `None` is the top level.
+    pub fn parent(&self) -> Option<&str> {
+        self.parent.as_deref()
+    }
     pub fn name(&self) -> &[u16] {
         &self.name
     }
@@ -226,7 +268,7 @@ impl Drop for WriteSpool {
 
 struct RejectWriteSink;
 impl WriteSink for RejectWriteSink {
-    fn begin(&self, _name: &[u16]) -> Result<WriteSpool, String> {
+    fn begin(&self, _parent: Option<&str>, _name: &[u16]) -> Result<WriteSpool, String> {
         Err("STASH mount writes are not configured for this filesystem.".to_string())
     }
     fn submit(&self, _spool: WriteSpool) -> Result<(), String> {
@@ -236,16 +278,21 @@ impl WriteSink for RejectWriteSink {
 
 
 /// An open handle: a folder (`None` is the drive root), a committed
-/// read-only file, or one new root-level file being written.
+/// read-only file, a new file being written, or a closed file whose upload
+/// has not landed yet (read from its local copy).
 pub enum Handle<P: RangeProvider> {
     Dir(Option<String>),
     File(Arc<OpenFile<P>>),
     Pending(Arc<Mutex<PendingWrite>>),
+    Queued { size: u64, path: PathBuf },
 }
+
+/// A name being written in one folder: (folder id, case-folded name).
+type ReservedName = (Option<String>, String);
 
 pub struct PendingWrite {
     spool: Option<WriteSpool>,
-    reserved_name: Option<Vec<u16>>,
+    reserved_name: Option<ReservedName>,
     submitted: bool,
     failure: Option<String>,
     size: u64,
@@ -285,7 +332,7 @@ impl PendingWrite {
     fn finalize(
         &mut self,
         sink: &dyn WriteSink,
-        pending_names: &Mutex<std::collections::HashSet<Vec<u16>>>,
+        pending_names: &Mutex<std::collections::HashSet<ReservedName>>,
     ) {
         if self.submitted {
             return;
@@ -342,34 +389,54 @@ fn read_error_to_fsp(err: ReadError) -> FspError {
     FspError::NTSTATUS(status.0)
 }
 
-/// Returns one safe root-level UTF-16 filename, preserving the original code
-/// units. Any separator, dot component, drive syntax, control character, or
-/// empty name is rejected; nested paths never reach the native sink.
-fn root_name(file_name: &U16CStr) -> Option<Vec<u16>> {
+/// Splits a drive path into its parent folder's path and its final name,
+/// preserving the name's original UTF-16 code units. `None` is the drive root
+/// itself. An unsafe final name (empty, a separator, a dot component, drive
+/// syntax, or a control character) comes back empty so callers refuse it.
+fn split_leaf(file_name: &U16CStr) -> Option<(U16CString, Vec<u16>)> {
     const BACKSLASH: u16 = b'\\' as u16;
     const SLASH: u16 = b'/' as u16;
-    let name = match file_name.as_slice() {
+    let path = match file_name.as_slice() {
         [] | [BACKSLASH] => return None,
         [BACKSLASH, rest @ ..] => rest,
         other => other,
     };
-    if name.is_empty()
-        || name.iter().any(|unit| {
-            *unit == BACKSLASH || *unit == SLASH || *unit == b':' as u16 || *unit < 0x20
-        })
-    {
-        return Some(Vec::new());
-    }
-    if name == [b'.' as u16] || name == [b'.' as u16, b'.' as u16] {
-        return Some(Vec::new());
-    }
-    Some(name.to_vec())
+    let (parent, name) = match path.iter().rposition(|unit| *unit == BACKSLASH) {
+        Some(index) => (&path[..index], &path[index + 1..]),
+        None => (&path[..0], path),
+    };
+    let mut parent_path = vec![BACKSLASH];
+    parent_path.extend_from_slice(parent);
+    let parent_path = U16CString::from_vec(parent_path).ok()?;
+    let unsafe_name = name.is_empty()
+        || name == [b'.' as u16]
+        || name == [b'.' as u16, b'.' as u16]
+        || name.iter().any(|unit| *unit == SLASH || *unit == b':' as u16 || *unit < 0x20);
+    Some((parent_path, if unsafe_name { Vec::new() } else { name.to_vec() }))
+}
+
+/// Case-folded form of a UTF-16 name: the volume is case-insensitive.
+fn fold(name: &[u16]) -> String {
+    String::from_utf16_lossy(name).to_lowercase()
+}
+
+/// Newly created folders stay on the drive this long even if STASH's listing
+/// (read from an eventually consistent index) does not show them yet.
+const CREATED_FOLDER_GRACE: Duration = Duration::from_secs(120);
+
+struct CreatedFolder {
+    parent: Option<String>,
+    id: String,
+    name: String,
+    at: Instant,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum NodeKind {
     Folder(String),
     File { id: String, size: u64 },
+    /// Closed on the drive, not listed by STASH yet: served from its spool.
+    Queued { size: u64, path: PathBuf },
 }
 
 /// A folder child with its on-drive name.
@@ -392,6 +459,7 @@ struct CachedDir {
 enum Resolved {
     Dir(Option<String>),
     File { id: String, size: u64 },
+    Queued { size: u64, path: PathBuf },
     NotFound,
 }
 
@@ -464,7 +532,7 @@ fn dir_rows(is_root: bool, nodes: &[Node], marker: Option<&[u16]>) -> Vec<DirRow
             name: node.name.as_slice().to_vec(),
             kind: match node.kind {
                 NodeKind::Folder(_) => RowKind::Folder,
-                NodeKind::File { size, .. } => RowKind::File(size),
+                NodeKind::File { size, .. } | NodeKind::Queued { size, .. } => RowKind::File(size),
             },
         });
     }
@@ -490,7 +558,10 @@ pub struct StashFileSystemContext<L: Library> {
     /// Shown as every item's date until the control plane records one.
     mounted_at: u64,
     write_sink: Arc<dyn WriteSink>,
-    pending_names: Mutex<std::collections::HashSet<Vec<u16>>>,
+    pending_names: Mutex<std::collections::HashSet<ReservedName>>,
+    /// "file:<id>" / "folder:<id>" marked for delete, awaiting cleanup.
+    pending_deletes: Mutex<std::collections::HashSet<String>>,
+    created_folders: Mutex<Vec<CreatedFolder>>,
 }
 
 impl<L: Library> StashFileSystemContext<L> {
@@ -507,24 +578,72 @@ impl<L: Library> StashFileSystemContext<L> {
             mounted_at: filetime_now(),
             write_sink,
             pending_names: Mutex::new(std::collections::HashSet::new()),
+            pending_deletes: Mutex::new(std::collections::HashSet::new()),
+            created_folders: Mutex::new(Vec::new()),
         }
     }
 
-    fn reserve_pending_name(&self, name: &[u16]) -> bool {
+    fn reserve_pending_name(&self, name: &ReservedName) -> bool {
         let mut pending_names = self
             .pending_names
             .lock()
             .expect("pending names lock poisoned");
         // The membership check and insertion share this one lock, so two
         // synchronous WinFSP create callbacks cannot reserve the same name.
-        pending_names.insert(name.to_vec())
+        pending_names.insert(name.clone())
     }
 
-    fn release_pending_name(&self, name: &[u16]) {
+    fn release_pending_name(&self, name: &ReservedName) {
         self.pending_names
             .lock()
             .expect("pending names lock poisoned")
             .remove(name);
+    }
+
+    /// A folder's children as the drive shows them: STASH's listing plus
+    /// folders created here that the listing does not show yet, plus closed
+    /// files whose upload has not landed.
+    fn view(&self, folder: Option<&str>) -> Result<Arc<Vec<Node>>, ReadError> {
+        let listed = self.children(folder)?;
+        let mut extra = Vec::new();
+        {
+            let mut created = self.created_folders.lock().expect("created folders lock poisoned");
+            created.retain(|entry| {
+                entry.at.elapsed() < CREATED_FOLDER_GRACE
+                    && !(entry.parent.as_deref() == folder
+                        && listed.iter().any(|node| node.kind == NodeKind::Folder(entry.id.clone())))
+            });
+            for entry in created.iter().filter(|entry| entry.parent.as_deref() == folder) {
+                if let Ok(name) = U16CString::from_str(&entry.name) {
+                    extra.push(Node { folded: entry.name.to_lowercase(), name, kind: NodeKind::Folder(entry.id.clone()) });
+                }
+            }
+        }
+        for queued in self.write_sink.queued_in(folder) {
+            if let Ok(name) = U16CString::from_vec(queued.name.clone()) {
+                extra.push(Node { folded: fold(&queued.name), name, kind: NodeKind::Queued { size: queued.size, path: queued.path } });
+            }
+        }
+        extra.retain(|node| !listed.iter().any(|existing| existing.folded == node.folded));
+        if extra.is_empty() {
+            return Ok(listed);
+        }
+        let mut nodes = listed.as_ref().clone();
+        nodes.extend(extra);
+        nodes.sort_by(|a, b| a.name.as_slice().cmp(b.name.as_slice()));
+        let mut seen = std::collections::HashSet::new();
+        nodes.retain(|node| seen.insert(node.folded.clone()));
+        Ok(Arc::new(nodes))
+    }
+
+    /// Whether `name` is taken in `folder`: listed, created, queued, or being written.
+    fn has_child(&self, folder: Option<&str>, name: &[u16]) -> Result<bool, ReadError> {
+        let folded = fold(name);
+        if self.view(folder)?.iter().any(|node| node.folded == folded) {
+            return Ok(true);
+        }
+        let reserved = (folder.map(str::to_string), folded);
+        Ok(self.pending_names.lock().expect("pending names lock poisoned").contains(&reserved))
     }
 
     /// A folder's children: the cached listing while fresh, otherwise a new
@@ -562,19 +681,65 @@ impl<L: Library> StashFileSystemContext<L> {
         let mut folder: Option<String> = None;
         for (index, part) in parts.iter().enumerate() {
             let folded = part.to_lowercase();
-            let nodes = self.children(folder.as_deref())?;
+            let nodes = self.view(folder.as_deref())?;
             let Some(node) = nodes.iter().find(|node| node.folded == folded) else {
                 return Ok(Resolved::NotFound);
             };
+            let last = index + 1 == parts.len();
             match &node.kind {
                 NodeKind::Folder(id) => folder = Some(id.clone()),
-                NodeKind::File { id, size } if index + 1 == parts.len() => {
+                NodeKind::File { id, size } if last => {
                     return Ok(Resolved::File { id: id.clone(), size: *size });
                 }
-                NodeKind::File { .. } => return Ok(Resolved::NotFound),
+                NodeKind::Queued { size, path } if last => {
+                    return Ok(Resolved::Queued { size: *size, path: path.clone() });
+                }
+                NodeKind::File { .. } | NodeKind::Queued { .. } => return Ok(Resolved::NotFound),
             }
         }
         Ok(Resolved::Dir(folder))
+    }
+
+    /// The Trash key for a handle; the drive root and unsubmitted writes have none.
+    fn delete_key(context: &Handle<L::Provider>) -> Option<String> {
+        match context {
+            Handle::Dir(Some(id)) => Some(format!("folder:{id}")),
+            Handle::File(file) => Some(format!("file:{}", file.id)),
+            // Not deletable yet: the drive root, a file still being written,
+            // and a file whose upload has not landed.
+            Handle::Dir(None) | Handle::Pending(_) | Handle::Queued { .. } => None,
+        }
+    }
+
+    /// Records or clears a pending delete (Windows' SetDelete step).
+    fn mark_delete(&self, context: &Handle<L::Provider>, delete: bool) -> Result<(), ReadError> {
+        let key = Self::delete_key(context).ok_or(ReadError::Io)?;
+        let mut pending = self.pending_deletes.lock().expect("pending deletes lock poisoned");
+        if delete { pending.insert(key); } else { pending.remove(&key); }
+        Ok(())
+    }
+
+    /// Carries out a delete (Windows' Cleanup step with the delete flag): the
+    /// item goes to STASH Trash and every cached listing is dropped so it
+    /// disappears now.
+    ///
+    /// WinFsp sets the cleanup delete flag only when a delete is still pending
+    /// at the last handle's cleanup, whether it came from SetDelete or from an
+    /// open with FILE_DELETE_ON_CLOSE (which never calls SetDelete). The flag
+    /// is therefore the authority; a retracted SetDelete never reaches here.
+    fn perform_delete(&self, context: &Handle<L::Provider>) -> Result<(), ReadError> {
+        let Some(key) = Self::delete_key(context) else { return Ok(()) };
+        self.pending_deletes.lock().expect("pending deletes lock poisoned").remove(&key);
+        let result = match context {
+            Handle::Dir(Some(id)) => self.library.trash(TrashTarget::Folder(id)),
+            Handle::File(file) => self.library.trash(TrashTarget::File(&file.id)),
+            _ => Ok(()),
+        };
+        self.dirs.lock().expect("dir cache lock poisoned").clear();
+        if let Handle::File(file) = context {
+            self.open_files.lock().expect("open file lock poisoned").remove(&file.id);
+        }
+        result
     }
 
     /// The shared open-file state for a committed file id.
@@ -589,6 +754,7 @@ impl<L: Library> StashFileSystemContext<L> {
             open.retain(|_, file| Arc::strong_count(file) > 1);
         }
         let file = Arc::new(OpenFile {
+            id: id.to_string(),
             size,
             cache: Cache::new(self.options.segment_size, self.options.read_timeout, size, self.options.file_cache_bytes),
             provider: self.library.open_file(id),
@@ -613,7 +779,9 @@ impl<L: Library> StashFileSystemContext<L> {
 
     fn file_info(&self, size: u64) -> FileInfo {
         let mut info = FileInfo::default();
-        info.file_attributes = FILE_ATTRIBUTE_READONLY.0;
+        // Not READONLY: Windows refuses to delete read-only files, and a
+        // Stashed file can be moved to Trash. Edits are still refused in `write`.
+        info.file_attributes = FILE_ATTRIBUTE_NORMAL.0;
         info.file_size = size;
         info.allocation_size = size;
         self.times(&mut info);
@@ -634,10 +802,37 @@ impl<L: Library> StashFileSystemContext<L> {
         Ok(bytes.len() as u32)
     }
 
-    /// Whether a root-level name is already taken by a listed item.
-    fn root_has(&self, name: &[u16]) -> Result<bool, ReadError> {
-        let folded = String::from_utf16_lossy(name).to_lowercase();
-        Ok(self.children(None)?.iter().any(|node| node.folded == folded))
+    /// Bytes of a queued file, read from its local spool.
+    fn read_queued(path: &std::path::Path, size: u64, buffer: &mut [u8], offset: u64) -> FspResult<u32> {
+        if offset >= size {
+            return Ok(0);
+        }
+        let length = (buffer.len() as u64).min(size - offset) as usize;
+        let mut file = File::open(path).map_err(|_| FspError::NTSTATUS(STATUS_IO_DEVICE_ERROR.0))?;
+        file.seek(SeekFrom::Start(offset)).map_err(|_| FspError::NTSTATUS(STATUS_IO_DEVICE_ERROR.0))?;
+        let mut read = 0;
+        while read < length {
+            match file.read(&mut buffer[read..length]) {
+                Ok(0) => break,
+                Ok(count) => read += count,
+                Err(_) => return Err(FspError::NTSTATUS(STATUS_IO_DEVICE_ERROR.0)),
+            }
+        }
+        Ok(read as u32)
+    }
+
+    /// Creates a folder in STASH and shows it at once, before the (eventually
+    /// consistent) listing catches up.
+    fn create_folder(&self, parent: Option<&str>, name: &[u16]) -> Result<String, ReadError> {
+        let name = String::from_utf16(name).map_err(|_| ReadError::Io)?;
+        let id = self.library.create_folder(parent, &name)?;
+        self.created_folders.lock().expect("created folders lock poisoned").push(CreatedFolder {
+            parent: parent.map(str::to_string),
+            id: id.clone(),
+            name,
+            at: Instant::now(),
+        });
+        Ok(id)
     }
 }
 
@@ -652,7 +847,7 @@ impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
     ) -> FspResult<FileSecurity> {
         let attributes = match self.resolve(file_name).map_err(read_error_to_fsp)? {
             Resolved::Dir(_) => FILE_ATTRIBUTE_DIRECTORY.0,
-            Resolved::File { .. } => FILE_ATTRIBUTE_READONLY.0,
+            Resolved::File { .. } | Resolved::Queued { .. } => FILE_ATTRIBUTE_NORMAL.0,
             Resolved::NotFound => return Err(FspError::NTSTATUS(STATUS_OBJECT_NAME_NOT_FOUND.0)),
         };
         Ok(FileSecurity { reparse: false, sz_security_descriptor: 0, attributes })
@@ -661,10 +856,20 @@ impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
     fn open(
         &self,
         file_name: &U16CStr,
-        _create_options: u32,
+        create_options: u32,
         _granted_access: u32,
         file_info: &mut OpenFileInfo,
     ) -> FspResult<Self::FileContext> {
+        const FILE_DELETE_ON_CLOSE: u32 = 0x0000_1000;
+        if create_options & FILE_DELETE_ON_CLOSE != 0 {
+            // The drive root can never be deleted; refuse before WinFsp
+            // records a delete-on-close for it.
+            if split_leaf(file_name).is_none() {
+                debug_mount_trace("open: delete-on-close refused for root");
+                return Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0));
+            }
+            debug_mount_trace("open: delete-on-close");
+        }
         match self.resolve(file_name).map_err(read_error_to_fsp)? {
             Resolved::Dir(folder) => {
                 *file_info.as_mut() = self.dir_info();
@@ -673,6 +878,10 @@ impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
             Resolved::File { id, size } => {
                 *file_info.as_mut() = self.file_info(size);
                 Ok(Handle::File(self.open_file(&id, size)))
+            }
+            Resolved::Queued { size, path } => {
+                *file_info.as_mut() = self.file_info(size);
+                Ok(Handle::Queued { size, path })
             }
             Resolved::NotFound => Err(FspError::NTSTATUS(STATUS_OBJECT_NAME_NOT_FOUND.0)),
         }
@@ -692,38 +901,60 @@ impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
     ) -> FspResult<Self::FileContext> {
         const FILE_DIRECTORY_FILE: u32 = 0x0000_0001;
         const FILE_ATTRIBUTE_DIRECTORY_VALUE: u32 = 0x10;
-        let Some(name) = root_name(file_name) else {
+        let Some((parent_path, name)) = split_leaf(file_name) else {
             debug_mount_trace("create: rejected root");
             return Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0));
         };
-        if name.is_empty()
-            || create_options & FILE_DIRECTORY_FILE != 0
-            || file_attributes & FILE_ATTRIBUTE_DIRECTORY_VALUE != 0
-        {
-            debug_mount_trace("create: rejected directory or unsafe name");
+        if name.is_empty() {
+            debug_mount_trace("create: rejected unsafe name");
             return Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0));
         }
-        if self.root_has(&name).map_err(read_error_to_fsp)? {
+        let parent = match self.resolve(&parent_path).map_err(read_error_to_fsp)? {
+            Resolved::Dir(parent) => parent,
+            _ => {
+                debug_mount_trace("create: parent folder not found");
+                return Err(FspError::NTSTATUS(STATUS_OBJECT_PATH_NOT_FOUND.0));
+            }
+        };
+        if self.has_child(parent.as_deref(), &name).map_err(read_error_to_fsp)? {
             debug_mount_trace("create: rejected existing name");
             return Err(FspError::NTSTATUS(STATUS_OBJECT_NAME_COLLISION.0));
         }
-        if !self.reserve_pending_name(&name) {
+        let reserved: ReservedName = (parent.clone(), fold(&name));
+        if !self.reserve_pending_name(&reserved) {
             debug_mount_trace("create: rejected pending collision");
             return Err(FspError::NTSTATUS(STATUS_OBJECT_NAME_COLLISION.0));
         }
-        let spool = match self.write_sink.begin(&name) {
+        if create_options & FILE_DIRECTORY_FILE != 0 || file_attributes & FILE_ATTRIBUTE_DIRECTORY_VALUE != 0 {
+            // A new folder is created in STASH right away, so Explorer can
+            // copy into it immediately.
+            let created = self.create_folder(parent.as_deref(), &name);
+            self.release_pending_name(&reserved);
+            return match created {
+                Ok(id) => {
+                    debug_mount_trace("create: folder created");
+                    *file_info.as_mut() = self.dir_info();
+                    Ok(Handle::Dir(Some(id)))
+                }
+                Err(error) => {
+                    debug_mount_trace("create: folder create failed");
+                    Err(read_error_to_fsp(error))
+                }
+            };
+        }
+        let spool = match self.write_sink.begin(parent.as_deref(), &name) {
             Ok(spool) => spool,
             Err(_) => {
                 // Reservation precedes sink creation so the check-and-reserve
                 // is atomic; a failed begin must roll it back immediately.
-                self.release_pending_name(&name);
+                self.release_pending_name(&reserved);
                 debug_mount_trace("create: spool begin failed");
                 return Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0));
             }
         };
         let pending = PendingWrite {
             spool: Some(spool),
-            reserved_name: Some(name),
+            reserved_name: Some(reserved),
             submitted: false,
             failure: None,
             size: 0,
@@ -736,7 +967,16 @@ impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
         Ok(handle)
     }
 
-    fn cleanup(&self, context: &Self::FileContext, _file_name: Option<&U16CStr>, _flags: u32) {
+    fn cleanup(&self, context: &Self::FileContext, _file_name: Option<&U16CStr>, flags: u32) {
+        const FSP_CLEANUP_DELETE: u32 = 0x01;
+        if flags & FSP_CLEANUP_DELETE != 0 {
+            // Windows can't report a cleanup failure; a failed Trash call
+            // simply leaves the item listed on the next refresh.
+            match self.perform_delete(context) {
+                Ok(()) => debug_mount_trace("cleanup: delete flag, moved to Trash"),
+                Err(_) => debug_mount_trace("cleanup: delete flag, trash failed"),
+            }
+        }
         if let Handle::Pending(pending) = context {
             debug_mount_trace("cleanup: pending handle");
             if let Ok(mut pending) = pending.lock() {
@@ -769,6 +1009,7 @@ impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
                 info.allocation_size = info.file_size;
                 info
             }
+            Handle::Queued { size, .. } => self.file_info(*size),
         };
         Ok(())
     }
@@ -776,6 +1017,7 @@ impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
     fn read(&self, context: &Self::FileContext, buffer: &mut [u8], offset: u64) -> FspResult<u32> {
         match context {
             Handle::File(file) => self.read_file(file, buffer, offset),
+            Handle::Queued { size, path } => Self::read_queued(path, *size, buffer, offset),
             Handle::Pending(_) => Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0)),
             Handle::Dir(_) => Err(FspError::NTSTATUS(STATUS_INVALID_DEVICE_REQUEST.0)),
         }
@@ -843,16 +1085,42 @@ impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
         _new_file_name: &U16CStr,
         _replace_if_exists: bool,
     ) -> FspResult<()> {
+        debug_mount_trace("rename: refused (not supported yet)");
         Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0))
     }
 
     fn set_delete(
         &self,
-        _context: &Self::FileContext,
+        context: &Self::FileContext,
         _file_name: &U16CStr,
-        _delete_file: bool,
+        delete_file: bool,
     ) -> FspResult<()> {
-        Err(FspError::NTSTATUS(STATUS_ACCESS_DENIED.0))
+        // Deleting on S: moves the item to STASH Trash (recoverable). The
+        // drive root and not-yet-submitted writes can't be deleted.
+        let result = self.mark_delete(context, delete_file);
+        debug_mount_trace(match (&result, delete_file) {
+            (Ok(()), true) => "set_delete: marked",
+            (Ok(()), false) => "set_delete: retracted",
+            (Err(_), _) => "set_delete: refused",
+        });
+        result.map_err(|_| FspError::NTSTATUS(STATUS_ACCESS_DENIED.0))
+    }
+
+    /// Explorer and most apps set attributes and times after copying or
+    /// touching a file. STASH doesn't store either yet, so accept the call
+    /// and report the item's current info instead of failing the copy.
+    #[allow(clippy::too_many_arguments)]
+    fn set_basic_info(
+        &self,
+        context: &Self::FileContext,
+        _file_attributes: u32,
+        _creation_time: u64,
+        _last_access_time: u64,
+        _last_write_time: u64,
+        _last_change_time: u64,
+        file_info: &mut FileInfo,
+    ) -> FspResult<()> {
+        self.get_file_info(context, file_info)
     }
 
     fn set_file_size(
@@ -887,7 +1155,7 @@ impl<L: Library> FileSystemContext for StashFileSystemContext<L> {
         let Handle::Dir(folder) = context else {
             return Err(FspError::NTSTATUS(STATUS_INVALID_DEVICE_REQUEST.0));
         };
-        let nodes = self.children(folder.as_deref()).map_err(read_error_to_fsp)?;
+        let nodes = self.view(folder.as_deref()).map_err(read_error_to_fsp)?;
         let mut cursor = 0u32;
         let mut dir_info: DirInfo<255> = DirInfo::new();
         for row in dir_rows(folder.is_none(), &nodes, marker.inner()) {
@@ -943,6 +1211,10 @@ mod tests {
         list_calls: AtomicUsize,
         opens: AtomicUsize,
         offline: AtomicBool,
+        trashed: Mutex<Vec<String>>,
+        /// Folders created through the drive, as (parent, name). Not added to
+        /// the listing, like STASH's eventually consistent index right after.
+        created: Mutex<Vec<(Option<String>, String)>>,
     }
 
     impl Library for FakeLibrary {
@@ -960,6 +1232,20 @@ mod tests {
         }
         fn used_bytes(&self) -> Option<u64> {
             Some(42)
+        }
+        fn trash(&self, target: TrashTarget<'_>) -> Result<(), ReadError> {
+            self.trashed.lock().unwrap().push(format!("{target:?}"));
+            // Trashed items no longer list, like the real control plane.
+            let id = match target { TrashTarget::File(id) | TrashTarget::Folder(id) => id.to_string() };
+            for children in self.folders.lock().unwrap().values_mut() {
+                children.retain(|child| !matches!(child, Listing::File { id: i, .. } | Listing::Folder { id: i, .. } if *i == id));
+            }
+            Ok(())
+        }
+        fn create_folder(&self, parent: Option<&str>, name: &str) -> Result<String, ReadError> {
+            let mut created = self.created.lock().unwrap();
+            created.push((parent.map(str::to_string), name.to_string()));
+            Ok(format!("new-{}", created.len()))
         }
     }
 
@@ -1128,7 +1414,8 @@ mod tests {
         let dir = fs.get_security_by_name(&path("\\KSHMR Vol 5"), None, |_| None).unwrap();
         assert_eq!(dir.attributes, FILE_ATTRIBUTE_DIRECTORY.0);
         let file = fs.get_security_by_name(&path("\\KSHMR Vol 5\\Kicks\\Kick_G#_128.wav"), None, |_| None).unwrap();
-        assert_eq!(file.attributes, FILE_ATTRIBUTE_READONLY.0);
+        // Not read-only: Windows refuses to delete read-only files.
+        assert_eq!(file.attributes, FILE_ATTRIBUTE_NORMAL.0);
         assert!(fs.get_security_by_name(&path("\\missing.wav"), None, |_| None).is_err());
     }
 
@@ -1140,21 +1427,71 @@ mod tests {
     }
 
     #[test]
-    fn root_collision_check_is_case_insensitive() {
-        let fs = fs();
-        assert!(fs.root_has(path("LOGO.SVG").as_slice()).unwrap());
-        assert!(!fs.root_has(path("new.wav").as_slice()).unwrap());
+    fn deleting_a_file_sends_it_to_trash_and_it_disappears_immediately() {
+        let fs = fs(); // 60 s listing TTL: only cache invalidation can hide it.
+        let handle = Handle::File(fs.open_file("kick", 17));
+        assert!(fs.resolve(&path("\\KSHMR Vol 5\\Kicks\\Kick_G#_128.wav")).unwrap() != Resolved::NotFound);
+        fs.mark_delete(&handle, true).unwrap();
+        fs.perform_delete(&handle).unwrap();
+        assert_eq!(*fs.library.trashed.lock().unwrap(), vec![r#"File("kick")"#]);
+        assert_eq!(fs.resolve(&path("\\KSHMR Vol 5\\Kicks\\Kick_G#_128.wav")).unwrap(), Resolved::NotFound);
     }
 
-    // --- Root-level write path (unchanged behaviour) ---
+    #[test]
+    fn deleting_a_folder_trashes_the_folder() {
+        let fs = fs();
+        let handle = Handle::Dir(Some("pack".into()));
+        fs.mark_delete(&handle, true).unwrap();
+        fs.perform_delete(&handle).unwrap();
+        assert_eq!(*fs.library.trashed.lock().unwrap(), vec![r#"Folder("pack")"#]);
+        assert_eq!(fs.resolve(&path("\\KSHMR Vol 5")).unwrap(), Resolved::NotFound);
+    }
+
+    #[test]
+    fn cleanup_without_the_delete_flag_trashes_nothing() {
+        let fs = fs();
+        let handle = Handle::File(fs.open_file("kick", 17));
+        fs.cleanup(&handle, None, 0);
+        fs.mark_delete(&handle, true).unwrap();
+        fs.mark_delete(&handle, false).unwrap(); // Windows may retract a delete.
+        fs.cleanup(&handle, None, 0);
+        assert!(fs.library.trashed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn delete_on_close_trashes_without_a_set_delete() {
+        // FILE_DELETE_ON_CLOSE never calls SetDelete; WinFsp only sets the
+        // cleanup delete flag. That flag alone must reach STASH Trash.
+        let fs = fs();
+        let handle = Handle::File(fs.open_file("kick", 17));
+        fs.cleanup(&handle, None, 0x01);
+        assert_eq!(fs.library.trashed.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_drive_root_can_never_be_deleted() {
+        let fs = fs();
+        assert!(fs.mark_delete(&Handle::Dir(None), true).is_err());
+    }
+
+    #[test]
+    fn collision_check_is_case_insensitive_and_per_folder() {
+        let fs = fs();
+        assert!(fs.has_child(None, path("LOGO.SVG").as_slice()).unwrap());
+        assert!(!fs.has_child(None, path("new.wav").as_slice()).unwrap());
+        assert!(fs.has_child(Some("kicks"), path("kick_g#_128.WAV").as_slice()).unwrap());
+        assert!(!fs.has_child(Some("pack"), path("logo.svg").as_slice()).unwrap());
+    }
+
+    // --- Write path ---
 
     struct CountingSink {
         submissions: AtomicUsize,
     }
 
     impl WriteSink for CountingSink {
-        fn begin(&self, name: &[u16]) -> Result<WriteSpool, String> {
-            WriteSpool::create_for_mount(name)
+        fn begin(&self, parent: Option<&str>, name: &[u16]) -> Result<WriteSpool, String> {
+            WriteSpool::create_for_mount(parent, name)
         }
         fn submit(&self, spool: WriteSpool) -> Result<(), String> {
             self.submissions.fetch_add(1, Ordering::SeqCst);
@@ -1166,7 +1503,7 @@ mod tests {
     struct FailingBeginSink;
 
     impl WriteSink for FailingBeginSink {
-        fn begin(&self, _name: &[u16]) -> Result<WriteSpool, String> {
+        fn begin(&self, _parent: Option<&str>, _name: &[u16]) -> Result<WriteSpool, String> {
             Err("begin failed".to_string())
         }
         fn submit(&self, _spool: WriteSpool) -> Result<(), String> {
@@ -1174,43 +1511,72 @@ mod tests {
         }
     }
 
+    /// A sink with one upload still in flight, in the `pack` folder.
+    struct QueuedSink {
+        upload: QueuedUpload,
+    }
+
+    impl WriteSink for QueuedSink {
+        fn begin(&self, parent: Option<&str>, name: &[u16]) -> Result<WriteSpool, String> {
+            WriteSpool::create_for_mount(parent, name)
+        }
+        fn submit(&self, _spool: WriteSpool) -> Result<(), String> {
+            Ok(())
+        }
+        fn queued_in(&self, parent: Option<&str>) -> Vec<QueuedUpload> {
+            if parent == Some("pack") { vec![self.upload.clone()] } else { Vec::new() }
+        }
+    }
+
+    fn reserved(parent: Option<&str>, name: &str) -> ReservedName {
+        (parent.map(str::to_string), name.to_lowercase())
+    }
+
     #[test]
     fn failed_begin_rolls_back_the_pending_name_reservation() {
         let fs = StashFileSystemContext::new_with_write_sink(library(), DriveOptions::default(), Arc::new(FailingBeginSink));
-        let name = path("retry.wav");
-        assert!(fs.write_sink.begin(name.as_slice()).is_err());
-        assert!(fs.reserve_pending_name(name.as_slice()));
-        fs.release_pending_name(name.as_slice());
+        assert!(fs.write_sink.begin(None, path("retry.wav").as_slice()).is_err());
+        assert!(fs.reserve_pending_name(&reserved(None, "retry.wav")));
+        fs.release_pending_name(&reserved(None, "retry.wav"));
     }
 
     #[test]
     fn concurrent_same_name_reservation_allows_exactly_one_handle() {
         let fs = Arc::new(fs());
-        let name = path("concurrent.wav");
+        let name = reserved(Some("pack"), "concurrent.wav");
         let results = std::thread::scope(|scope| {
             (0..8)
                 .map(|_| {
                     let fs = Arc::clone(&fs);
                     let name = name.clone();
-                    scope.spawn(move || fs.reserve_pending_name(name.as_slice()))
+                    scope.spawn(move || fs.reserve_pending_name(&name))
                 })
                 .map(|thread| thread.join().unwrap())
                 .collect::<Vec<_>>()
         });
         assert_eq!(results.iter().filter(|reserved| **reserved).count(), 1);
-        fs.release_pending_name(name.as_slice());
+        fs.release_pending_name(&name);
+    }
+
+    #[test]
+    fn the_same_name_can_be_written_in_two_folders_at_once() {
+        let fs = fs();
+        assert!(fs.reserve_pending_name(&reserved(Some("pack"), "take.wav")));
+        assert!(fs.reserve_pending_name(&reserved(Some("kicks"), "Take.wav")));
+        assert!(!fs.reserve_pending_name(&reserved(Some("pack"), "TAKE.WAV")));
+        assert!(fs.has_child(Some("pack"), path("take.wav").as_slice()).unwrap());
     }
 
     #[test]
     fn failed_spool_write_is_not_submitted_and_name_can_be_reused() {
         let sink = CountingSink { submissions: AtomicUsize::new(0) };
-        let name = path("failed-write.wav");
+        let name = reserved(None, "failed-write.wav");
         let fs = fs();
-        assert!(fs.reserve_pending_name(name.as_slice()));
-        let spool = WriteSpool::create_for_mount(name.as_slice()).unwrap();
+        assert!(fs.reserve_pending_name(&name));
+        let spool = WriteSpool::create_for_mount(None, path("failed-write.wav").as_slice()).unwrap();
         let mut pending = PendingWrite {
             spool: Some(spool),
-            reserved_name: Some(name.as_slice().to_vec()),
+            reserved_name: Some(name.clone()),
             submitted: false,
             failure: None,
             size: 0,
@@ -1220,22 +1586,60 @@ mod tests {
         pending.finalize(&sink, &fs.pending_names);
         assert!(pending.failure.is_some());
         assert_eq!(sink.submissions.load(Ordering::SeqCst), 0);
-        assert!(fs.reserve_pending_name(name.as_slice()));
-        fs.release_pending_name(name.as_slice());
+        assert!(fs.reserve_pending_name(&name));
+        fs.release_pending_name(&name);
     }
 
     #[test]
-    fn root_name_preserves_unicode_and_rejects_unsafe_paths() {
-        let unicode = path("Étage.wav");
-        assert_eq!(root_name(&unicode).unwrap(), unicode.as_slice());
-        assert!(root_name(&path("\\Beats\\take.wav")).unwrap().is_empty());
-        assert!(root_name(&path("\\..\\take.wav")).unwrap().is_empty());
-        assert!(root_name(&path("\\C:take.wav")).unwrap().is_empty());
+    fn split_leaf_keeps_unicode_names_at_any_depth_and_rejects_unsafe_ones() {
+        assert!(split_leaf(&path("\\")).is_none());
+        let (parent, name) = split_leaf(&path("\\Étage.wav")).unwrap();
+        assert_eq!(parent.to_string_lossy(), "\\");
+        assert_eq!(String::from_utf16_lossy(&name), "Étage.wav");
+        let (parent, name) = split_leaf(&path("\\Beats\\Drums\\take.wav")).unwrap();
+        assert_eq!(parent.to_string_lossy(), "\\Beats\\Drums");
+        assert_eq!(String::from_utf16_lossy(&name), "take.wav");
+        for unsafe_path in ["\\Beats\\..", "\\Beats\\.", "\\C:take.wav", "\\Beats\\", "\\a/b"] {
+            assert!(split_leaf(&path(unsafe_path)).unwrap().1.is_empty(), "{unsafe_path}");
+        }
+    }
+
+    #[test]
+    fn a_created_folder_shows_at_once_even_before_stash_lists_it() {
+        let fs = fs();
+        let id = fs.create_folder(Some("pack"), path("Snares").as_slice()).unwrap();
+        assert_eq!(fs.library.created.lock().unwrap().as_slice(), &[(Some("pack".to_string()), "Snares".to_string())]);
+        // The fake's listing does not include it yet (eventual consistency).
+        assert_eq!(fs.resolve(&path("\\KSHMR Vol 5\\snares")).unwrap(), Resolved::Dir(Some(id.clone())));
+        assert!(fs.has_child(Some("pack"), path("SNARES").as_slice()).unwrap());
+        // Once STASH lists it, it appears exactly once.
+        fs.library.folders.lock().unwrap().get_mut(&Some("pack".to_string())).unwrap().push(folder(&id, "Snares"));
+        fs.dirs.lock().unwrap().clear();
+        let names: Vec<String> = fs.view(Some("pack")).unwrap().iter().map(|node| node.name.to_string_lossy()).collect();
+        assert_eq!(names.iter().filter(|name| *name == "Snares").count(), 1);
+        assert!(fs.created_folders.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_file_still_uploading_is_listed_and_readable_from_its_local_copy() {
+        let spool = std::env::temp_dir().join(format!("stash-queued-test-{}.spool", std::process::id()));
+        std::fs::write(&spool, b"queued bytes").unwrap();
+        let sink = QueuedSink { upload: QueuedUpload { name: path("Clap.wav").as_slice().to_vec(), size: 12, path: spool.clone() } };
+        let fs = StashFileSystemContext::new_with_write_sink(library(), DriveOptions::default(), Arc::new(sink));
+        let rows = dir_rows(false, &fs.view(Some("pack")).unwrap(), None);
+        assert!(rows.contains(&DirRow { name: path("Clap.wav").as_slice().to_vec(), kind: RowKind::File(12) }));
+        assert_eq!(fs.resolve(&path("\\KSHMR Vol 5\\clap.wav")).unwrap(), Resolved::Queued { size: 12, path: spool.clone() });
+        let mut buffer = [0u8; 32];
+        let read = StashFileSystemContext::<FakeLibrary>::read_queued(&spool, 12, &mut buffer, 7).unwrap();
+        assert_eq!(&buffer[..read as usize], b"bytes");
+        assert!(fs.has_child(Some("pack"), path("CLAP.WAV").as_slice()).unwrap());
+        assert!(StashFileSystemContext::<FakeLibrary>::delete_key(&Handle::Queued { size: 12, path: spool.clone() }).is_none());
+        let _ = std::fs::remove_file(spool);
     }
 
     #[test]
     fn pending_spool_writes_at_offsets_and_zero_fills_gaps() {
-        let mut spool = WriteSpool::create_for_mount(path("offset.wav").as_slice()).unwrap();
+        let mut spool = WriteSpool::create_for_mount(None, path("offset.wav").as_slice()).unwrap();
         spool.write_at(b"stash", 4, false).unwrap();
         let path = spool.path().to_path_buf();
         spool.prepare().unwrap();
@@ -1244,8 +1648,14 @@ mod tests {
     }
 
     #[test]
+    fn a_spool_remembers_its_destination_folder() {
+        let spool = WriteSpool::create_for_mount(Some("kicks"), path("take.wav").as_slice()).unwrap();
+        assert_eq!(spool.parent(), Some("kicks"));
+    }
+
+    #[test]
     fn pending_spool_accepts_windows_style_resize_before_write() {
-        let spool = WriteSpool::create_for_mount(path("resize.wav").as_slice()).unwrap();
+        let spool = WriteSpool::create_for_mount(None, path("resize.wav").as_slice()).unwrap();
         let mut pending = PendingWrite { spool: Some(spool), reserved_name: None, submitted: false, failure: None, size: 0 };
         pending.set_size(8).unwrap();
         pending.write_at(b"ok", 2, false).unwrap();
@@ -1259,7 +1669,7 @@ mod tests {
     #[test]
     fn cleanup_and_submission_are_idempotent() {
         let sink = CountingSink { submissions: AtomicUsize::new(0) };
-        let spool = WriteSpool::create_for_mount(path("once.wav").as_slice()).unwrap();
+        let spool = WriteSpool::create_for_mount(None, path("once.wav").as_slice()).unwrap();
         let path = spool.path().to_path_buf();
         let mut pending = PendingWrite { spool: Some(spool), reserved_name: None, submitted: false, failure: None, size: 0 };
         let pending_names = Mutex::new(std::collections::HashSet::new());
@@ -1273,19 +1683,19 @@ mod tests {
     fn successful_cleanup_releases_name_for_a_retry() {
         let sink = CountingSink { submissions: AtomicUsize::new(0) };
         let fs = fs();
-        let name = path("cleanup-retry.wav");
-        assert!(fs.reserve_pending_name(name.as_slice()));
-        let spool = WriteSpool::create_for_mount(name.as_slice()).unwrap();
+        let name = reserved(Some("kicks"), "cleanup-retry.wav");
+        assert!(fs.reserve_pending_name(&name));
+        let spool = WriteSpool::create_for_mount(Some("kicks"), path("cleanup-retry.wav").as_slice()).unwrap();
         let mut pending = PendingWrite {
             spool: Some(spool),
-            reserved_name: Some(name.as_slice().to_vec()),
+            reserved_name: Some(name.clone()),
             submitted: false,
             failure: None,
             size: 0,
         };
         pending.finalize(&sink, &fs.pending_names);
         assert_eq!(sink.submissions.load(Ordering::SeqCst), 1);
-        assert!(fs.reserve_pending_name(name.as_slice()));
-        fs.release_pending_name(name.as_slice());
+        assert!(fs.reserve_pending_name(&name));
+        fs.release_pending_name(&name);
     }
 }

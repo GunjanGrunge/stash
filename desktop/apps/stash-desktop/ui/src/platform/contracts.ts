@@ -18,6 +18,7 @@ export type DesktopGateway = {
     listChildren(folderId: string): Promise<{ items?: ChildItem[] }>;
     createFolder(name: string, parentFolderId: string): Promise<ChildItem>;
     trashFolder(folderId: string): Promise<void>;
+    trashFile(fileId: string): Promise<void>;
     getUsage(): Promise<Usage>;
     mountStatus(): Promise<MountStatus>;
     mountStash(): Promise<MountStatus>;

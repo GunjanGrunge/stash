@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { CapabilityState, ChildItem, FolderLocation, MountStatus, SortDirection, SortKey, Usage } from "../domain/types";
 import type { DesktopGateway } from "../platform/contracts";
 import { safeActionError } from "../platform/tauri/gateway";
+import { Breadcrumb } from "./ui";
 
 export function formatBytes(value?: number | null): string {
   if (value == null || !Number.isFinite(value)) return "—";
@@ -63,6 +64,26 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
     loadChildren();
   }, [folderId, gateway]);
 
+  // Changes made on S: (or elsewhere) show up when the creator comes back to
+  // the app. This reload is quiet: no loading flash, and a selection that
+  // still exists stays selected.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      void gateway.library.listChildren(folderId).then((result) => {
+        const fresh = Array.isArray(result.items) ? result.items : [];
+        setFilesState({ status: "ready", data: fresh });
+        setSelected((current) => current && (fresh.find((item) => item.entity === current.entity && (item.fileId ?? item.folderId) === (current.fileId ?? current.folderId)) ?? null));
+      }).catch(() => undefined);
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [folderId, gateway]);
+
   const items = filesState.status === "ready" || filesState.status === "stale" ? (filesState.data ?? []) : [];
 
   const filteredItems = useMemo(() => {
@@ -103,18 +124,22 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
     }
   };
 
-  const trashFolder = async () => {
+  const trashItem = async () => {
     const target = confirmTrash;
-    if (!target?.folderId) return;
+    if (!target) return;
+    const isFolder = target.entity === "FOLDER";
+    const id = isFolder ? target.folderId : target.fileId;
+    if (!id) return;
     setTrashingFolder(true);
     setFolderError("");
     try {
-      await gateway.library.trashFolder(target.folderId);
+      if (isFolder) await gateway.library.trashFolder(id);
+      else await gateway.library.trashFile(id);
       if (selected === target) setSelected(null);
       setConfirmTrash(null);
       loadChildren();
     } catch (error) {
-      setFolderError(safeActionError(error, "STASH couldn't move that folder to Trash."));
+      setFolderError(safeActionError(error, isFolder ? "STASH couldn't move that folder to Trash." : "STASH couldn't move that file to Trash."));
     } finally {
       setTrashingFolder(false);
     }
@@ -158,14 +183,6 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
         <div>
           <p className="eyebrow">Library</p>
           <h1 id="files-heading">Your files</h1>
-          <nav className="breadcrumb" aria-label="Breadcrumb">
-            <button type="button" onClick={() => goTo(null, -1)}>Library</button>
-            {path.map((location, index) => (
-              <span key={`${location.id}-${index}`}>
-                &rsaquo; <button type="button" onClick={() => goTo(location, index)}>{location.name}</button>
-              </span>
-            ))}
-          </nav>
         </div>
 
         <div className="workspace-actions">
@@ -186,6 +203,12 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
         </div>
       </header>
 
+      <Breadcrumb
+        trail={path}
+        onNavigate={(index) => goTo(index < 0 ? null : path[index] ?? null, index)}
+        itemCount={filesState.status === "ready" || filesState.status === "stale" ? items.length : undefined}
+      />
+
       {folderError && !showNewFolderModal && <div className="status-banner banner-warning" role="alert">{folderError}</div>}
 
       {filesState.status === "stale" && (
@@ -194,9 +217,9 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
 
       {confirmTrash && (
         <div className="status-banner banner-warning" role="alert">
-          <span>Move <strong>{confirmTrash.name}</strong> and everything inside it to Trash? It can be restored for 30 days.</span>
+          <span>Move <strong>{confirmTrash.name}</strong>{confirmTrash.entity === "FOLDER" ? " and everything inside it" : ""} to Trash? It can be restored for 30 days.</span>
           <span className="banner-actions">
-            <button type="button" className="button button-danger button-sm" disabled={trashingFolder} onClick={() => void trashFolder()}>
+            <button type="button" className="button button-danger button-sm" disabled={trashingFolder} onClick={() => void trashItem()}>
               {trashingFolder ? "Moving…" : "Move to Trash"}
             </button>
             <button type="button" className="button button-secondary button-sm" disabled={trashingFolder} onClick={() => setConfirmTrash(null)}>Cancel</button>
@@ -252,11 +275,11 @@ export function FilesScreen({ gateway, onUsage, onMount, onStash }: { gateway: D
                     <td>{kindOf(item) === "Folder" ? "—" : formatBytes(item.sizeBytes)}</td>
                     <td>
                       <div className="row-actions">
-                        {item.entity === "FOLDER" && item.folderId && (
+                        {(item.entity === "FOLDER" ? item.folderId : item.fileId) && (
                           <button
                             type="button"
                             className="icon-action-btn"
-                            title="Move folder to Trash"
+                            title={item.entity === "FOLDER" ? "Move folder to Trash" : "Move file to Trash"}
                             aria-label={`Move ${item.name} to Trash`}
                             onClick={(e) => { e.stopPropagation(); setConfirmTrash(item); }}
                           >

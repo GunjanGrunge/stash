@@ -45,6 +45,7 @@ const search = (query: string): SearchResponse => ({
     : [],
   total: query.trim() ? 2 : 0,
   unsupported: [],
+  understood: query.trim() ? ["Name: kick", "Key: G#", "Tempo: 120–130 BPM"] : [],
   indexedFiles: 38_412,
   truncated: false,
 });
@@ -65,6 +66,7 @@ export function createPreviewGateway(): DesktopGateway {
       listChildren: async (folderId) => ({ items: folders[folderId] ?? [] }),
       createFolder: async (name) => ({ entity: "FOLDER", folderId: `new-${name}`, name }),
       trashFolder: ok,
+      trashFile: ok,
       getUsage: async () => ({ provisioned: true, usedBytes: 624 * 1024 ** 3, quotaBytes: 1024 ** 4 }),
       mountStatus: async () => mount(),
       mountStash: async () => { mounted = true; return mount(); },

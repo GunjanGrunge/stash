@@ -1,6 +1,7 @@
 // Dev-only screen preview: renders the real app screens with sample data.
 //   ?screen=Home|Files|Search|Recent Stashes|Offline|Transfers|Settings
 //   &stash=1   open Stash it
+//   &q=…       start Search with this query
 //   ?view=welcome   the signed-out Welcome screen
 import { StrictMode, useReducer } from "react";
 import { createRoot } from "react-dom/client";
@@ -33,7 +34,7 @@ function Preview() {
       <TitleBar gateway={gateway} />
       {params.get("view") === "welcome"
         ? <WelcomeScreen gateway={gateway} state={auth} dispatch={dispatch} />
-        : <Shell gateway={gateway} username="Maya Chen" onSignOut={() => undefined} initialScreen={screen} initialStashOpen={params.get("stash") === "1"} initialSettingsSection={(params.get("section") ?? "General") as SettingsSection} />}
+        : <Shell gateway={gateway} username="Maya Chen" onSignOut={() => undefined} initialScreen={screen} initialStashOpen={params.get("stash") === "1"} initialSettingsSection={(params.get("section") ?? "General") as SettingsSection} initialSearchQuery={params.get("q") ?? ""} />}
     </div>
   );
 }
