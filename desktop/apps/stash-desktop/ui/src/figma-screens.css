@@ -14,7 +14,7 @@
 .ui-stat-heading { display: flex; align-items: center; justify-content: space-between; font: 400 12px/1.2 Inter, system-ui, sans-serif; color: var(--muted); }
 .ui-stat-value { margin: 0; font: 400 26px/1.2 Inter, system-ui, sans-serif; color: var(--text); }
 .ui-stat-sub { margin: 0; font: 400 11px/1.2 Inter, system-ui, sans-serif; color: var(--text-faint); }
-.ui-readiness { display: flex; flex: 1; flex-direction: column; gap: 12px; min-width: 0; padding: 18px; border: 1px solid #3d5a1c; border-radius: 16px; background: var(--accent-soft); }
+.ui-readiness { display: flex; flex: 1; flex-direction: column; gap: 12px; min-width: 0; padding: 18px; border: 1px solid #1d4a63; border-radius: 16px; background: var(--accent-soft); }
 .ui-readiness-heading { display: flex; align-items: flex-start; justify-content: space-between; font: 700 10px/1.2 Inter, system-ui, sans-serif; color: var(--accent); }
 .ui-readiness-title { margin: 0; font: 400 16px/1.2 Inter, system-ui, sans-serif; color: var(--text); }
 .ui-readiness-copy { margin: 0; font: 400 10px/1.4 Inter, system-ui, sans-serif; color: var(--muted); }
@@ -96,7 +96,7 @@
 .transfer-rate-value { margin: 0; font: 700 16px/1.2 var(--font-mono); color: var(--accent); }
 .transfer-rate-eta { margin: 0; font: 400 10px/1.2 Inter, system-ui, sans-serif; color: var(--text-faint); }
 .transfer-track { height: 8px; border-radius: 999px; background: var(--border); overflow: hidden; }
-.transfer-track > span { display: block; height: 100%; border-radius: 999px; background: var(--accent); transition: width 0.4s ease; }
+.transfer-track > span { display: block; height: 100%; border-radius: 999px; background: var(--progress-fill); transition: width 0.4s ease; }
 .transfer-route { display: flex; align-items: center; gap: 12px; }
 .transfer-endpoint { display: flex; flex: 1; align-items: center; gap: 9px; min-width: 0; padding: 12px; border-radius: 10px; background: var(--surface-sunken); }
 .transfer-endpoint > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -189,7 +189,7 @@
 .home-device-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .home-device-name { font: 400 12px/1.2 Inter, system-ui, sans-serif; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .home-device-status { font: 400 10px/1.2 Inter, system-ui, sans-serif; color: var(--muted); }
-.home-callout { display: flex; flex-direction: column; gap: 15px; padding: 20px; border: 1px solid #3d5a1c; border-radius: 16px; background: var(--accent-soft); }
+.home-callout { display: flex; flex-direction: column; gap: 15px; padding: 20px; border: 1px solid #1d4a63; border-radius: 16px; background: var(--accent-soft); }
 .home-callout-title { margin: 0; font: 700 18px/1.2 Inter, system-ui, sans-serif; color: var(--text); }
 .home-callout-copy { margin: 0; font: 400 12px/1.5 Inter, system-ui, sans-serif; color: var(--muted); }
 .home-callout-button { width: 100%; }
@@ -197,7 +197,7 @@
 .home-transfer-name { font: 400 14px/1.2 Inter, system-ui, sans-serif; color: var(--text); }
 .home-transfer-meta { font: 400 11px/1.2 Inter, system-ui, sans-serif; color: var(--muted); }
 .home-transfer-track { height: 6px; border-radius: 999px; background: var(--border); overflow: hidden; }
-.home-transfer-track > span { display: block; height: 100%; background: var(--accent); }
+.home-transfer-track > span { display: block; height: 100%; background: var(--progress-fill); }
 @media (max-width: 1100px) {
   .home-body { flex-direction: column; }
   .home-side { width: 100%; }

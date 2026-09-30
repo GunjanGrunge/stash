@@ -1,24 +1,30 @@
 # STASH Brand Kit
 
-> **Decision 2026-09-28 — the Figma file now leads.** The product UI is
+> **Decision 2026-09-28 — the Figma file leads layout.** The product UI is
 > designed in Figma: <https://www.figma.com/design/oAh0eJj8QqTG7551p9GtfP/stash>.
-> Where this kit and Figma disagree, **Figma wins**. In particular the
-> in-app identity is a lime mark and lime primary actions on near-black
-> surfaces, replacing the cyan→violet gradient below:
+> Where this kit and Figma disagree on layout, components and surfaces,
+> **Figma wins**.
+>
+> **Decision 2026-09-30 — colour comes from this kit.** The user replaced
+> Figma's lime with the brand colours. The in-app mark is
+> `logos/symbol/STASH_symbol_gradient.svg` beside the Inter "STASH" name;
+> actions are solid cyan with ink text; the cyan→violet gradient is used
+> only for the symbol and progress bars, never behind text. Status colours
+> (online/success green, warning, error) are unchanged.
 >
 > | Token | Value | Use |
 > |---|---|---|
-> | `--accent` | `#B7FF3C` | Brand mark, primary buttons, focus |
-> | `--accent-ink` | `#101604` | Text on accent |
-> | `--accent-soft` | `#263716` | Accent pill background |
+> | `--accent` | `#38BDF8` | Primary buttons, links, active item, focus |
+> | `--accent-ink` | `#0B1424` | Text on accent (stash ink) |
+> | `--accent-soft` | `#0F2A3B` | Accent pill and active-item background |
+> | `--progress-fill` | `linear-gradient(90deg, #38BDF8, #7C3AED)` | Storage, Stash it and Transfers progress |
 > | `--surface` / `--surface-alt` | `#0E1014` / `#101115` | App backgrounds |
 > | `--surface-card` / `--surface-raised` / `--surface-sunken` | `#15171C` / `#1A1D23` / `#0B0C0F` | Cards, secondary buttons, inputs |
 > | `--text` / `--muted` / `--text-faint` | `#F3F5F7` / `#949BA8` / `#69707D` | Text |
 > | `--border` / `--border-strong` | `#292D35` / `#383E49` | Dividers, input and button borders |
 >
 > Type is Inter (400/500/700/800) with Roboto Mono for paths and labels,
-> both bundled in the desktop app via `@fontsource`. The sections below remain
-> for the logo/icon asset pack until those assets are redrawn to match.
+> both bundled in the desktop app via `@fontsource`.
 
 ## Source of truth
 

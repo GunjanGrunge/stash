@@ -130,7 +130,7 @@ const CATEGORY: Record<SearchKind, { label: string; color: string }> = {
   video: { label: "Video", color: "#a987ff" },
   audio: { label: "Audio", color: "#55a7ff" },
   midi: { label: "Audio", color: "#55a7ff" },
-  document: { label: "Project resources", color: "#b7ff3c" },
+  document: { label: "Project resources", color: "#2dd4bf" },
   image: { label: "Graphics", color: "#ffb84a" },
   other: { label: "LUTs + other", color: "#949ba8" },
 };

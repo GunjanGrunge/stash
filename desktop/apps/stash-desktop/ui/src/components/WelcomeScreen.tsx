@@ -8,6 +8,7 @@ import audioWaveformIcon from "../assets/figma/welcome/audio-waveform.svg";
 import chromeIcon from "../assets/figma/welcome/chrome.svg";
 import layersIcon from "../assets/figma/welcome/layers-3.svg";
 import platformDot from "../assets/figma/welcome/platform-dot.svg";
+import stashSymbol from "../assets/brand/stash-symbol.svg";
 import videoStill from "../assets/figma/welcome/video-still.jpg";
 
 type Props = { gateway: DesktopGateway; state: AuthState; dispatch: React.Dispatch<AuthEvent> };
@@ -33,7 +34,7 @@ function WelcomeStory() {
   return (
     <section className="welcome-story" aria-label="About STASH">
       <div className="welcome-brand">
-        <span className="welcome-brand-mark" aria-hidden="true">S</span>
+        <img className="welcome-brand-mark" src={stashSymbol} width={30} height={32} alt="" />
         <span className="welcome-brand-name">STASH</span>
       </div>
       <div className="welcome-hero">
