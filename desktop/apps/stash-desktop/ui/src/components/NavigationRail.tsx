@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import stashSymbol from "../assets/brand/stash-symbol.svg";
 import arrowUpDownIcon from "../assets/figma/shell/arrow-up-down.svg";
 import avatarImage from "../assets/figma/shell/avatar.svg";
 import chevronsIcon from "../assets/figma/shell/chevrons-up-down.svg";
@@ -58,7 +59,7 @@ export function NavigationRail({ active, onNavigate, onStash, usage, usagePercen
   return (
     <aside className="sidebar" aria-label="STASH navigation">
       <div className="sidebar-brand">
-        <span className="sidebar-brand-mark" aria-hidden="true">S</span>
+        <img className="sidebar-brand-mark" src={stashSymbol} width={26} height={28} alt="" />
         <span className="sidebar-brand-name">STASH</span>
       </div>
 
